@@ -1,0 +1,13 @@
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaClient
+metadata:
+  name: client-dev
+  namespace: default
+spec:
+  autoRemoveTimeout: 0s
+  coresNum: 1
+  image: quay.io/weka.io/weka-in-container:5.1.24
+  imagePullSecret: quay-io-robot-secret
+  targetCluster:
+    name: dev
+    namespace: default

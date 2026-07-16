@@ -1,0 +1,215 @@
+title: "WEKA on OKE — Dev / non-production (block-volume drives)"
+description: >-
+  One-click dev stack: provisions an OKE cluster with VM.Standard workers whose
+  WEKA drives come from block volumes (abundant quota, not for performance), and
+  installs the WEKA operator, image pull secret, and WekaPolicy/WekaCluster/
+  WekaClient in a single apply. Best for trying out the CSI driver / operator. For
+  local-NVMe production performance, use the Production stack instead.
+schemaVersion: 1.1.0
+version: "20240101"
+locale: "en"
+
+# WEKA logo on the Application Information tab, embedded as a base64 data URI.
+# ORM does not render arbitrary external logo URLs for non-Marketplace stacks
+# (only Marketplace content URLs), so the SVG is inlined here.
+logoUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0NTYuMDcgNDY4Ljc0Ij48ZGVmcz48c3R5bGU+LmNscy0xe2ZpbGw6IzZiMDBkZDt9PC9zdHlsZT48L2RlZnM+PHRpdGxlPldla2EgVmVydGljYWwgbG9nbyBQdXJwbGU8L3RpdGxlPjxnIGlkPSJMYXllcl8yIiBkYXRhLW5hbWU9IkxheWVyIDIiPjxnIGlkPSJMYXllcl8xLTIiIGRhdGEtbmFtZT0iTGF5ZXIgMSI+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMCwzNzUuNTZIMTEuMzdMMzcuOCw0NTIuNjEsNjMuMTgsMzc1LjNoOC41OWwyNS4zNyw3Ny4zMSwyNi40My03Ny4wNWgxMWwtMzMsOTMuMThIOTIuNjVMNjcuMjcsMzkzLjY3LDQxLjc2LDQ2OC43NEgzM1oiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0xNjEuODUsMzc1LjU2aDY2Ljg3djkuNTJIMTcyLjI5djMxLjU5aDUwLjQ4djkuNTFIMTcyLjI5djMyLjM4aDU3LjA5djkuNTJIMTYxLjg1WiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTI2Mi44NiwzNzUuNTZIMjczLjN2NTUuMjVsNTMuMTMtNTUuMjVoMTMuNDhMMzAwLjI2LDQxNmw0MS4zNyw1Mi4wN0gzMjguNTVMMjkzLDQyMy4yN2wtMTkuNywyMHYyNC44NUgyNjIuODZaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNDA0LjEzLDM3NC45aDkuNzhsNDIuMTYsOTMuMThINDQ0Ljg0TDQzNCw0NDMuNjNIMzgzLjY1bC0xMSwyNC40NUgzNjJabTI1Ljc3LDU5LjM0LTIxLTQ3LjE4LTIxLjE1LDQ3LjE4WiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTMyOS40NS4zMiwzOTYuNywwYTEwLjMsMTAuMywwLDAsMSwxMC4zNSwxMC4zVjc4YTEwLjMsMTAuMywwLDAsMS0xNy41OSw3LjI4TDMyMi4yMSwxNy45QTEwLjMsMTAuMywwLDAsMSwzMjkuNDUuMzJaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMjAuNzUsMTAuNTlWNjUuMUE1Ni42Nyw1Ni42NywwLDAsMCwzNy4yMSwxMDVMMjA4LjI4LDI3Ny4yMmExMC4zLDEwLjMsMCwwLDAsMTcuNi03LjI2VjIxNS40OGE1Ni42NCw1Ni42NCwwLDAsMC0xNi40NS0zOS45MkwzOC4zNiwzLjMzQTEwLjMsMTAuMywwLDAsMCwyMC43NSwxMC41OVoiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0yMDIuMzcsMTAuNTlWNjUuMUE1Ni42Nyw1Ni42NywwLDAsMCwyMTguODMsMTA1TDM4OS45LDI3Ny4yMkExMC4zLDEwLjMsMCwwLDAsNDA3LjUxLDI3MFYyMTUuNDhhNTYuNjUsNTYuNjUsMCwwLDAtMTYuNDYtMzkuOTJMMjIwLDMuMzNBMTAuMywxMC4zLDAsMCwwLDIwMi4zNywxMC41OVoiLz48L2c+PC9nPjwvc3ZnPg=="
+
+# Blue info box on the Create stack page.
+informationalText: >-
+  Prerequisites: a get.weka.io robot account (quay.io username + password) for the
+  image pull secret. This is the non-production stack — VM.Standard workers with
+  block-volume WEKA drives (abundant quota, not for IO performance). Set the
+  instance count below (min 6). It is frozen after the first apply, along with
+  networking. After apply, the Application Information tab gives you a one-click
+  kubeconfig command and a link straight to the cluster.
+
+variableGroups:
+  - title: "Hidden"
+    visible: false
+    variables:
+      - config_file_profile
+      - oci_cli_auth
+      - region
+      - home_region
+      - tenancy_ocid
+      - compartment_ocid
+      - control_plane_allowed_cidrs
+      - vcn_cidrs
+      - subnets
+      - nsgs
+      - ssh_public_key_path
+      # Flavor is pinned to non-production for this zip (see variables.flavor) and
+      # never shown; the production zip is a separate download.
+      - flavor
+      # Production-only knobs — unused / hidden in the dev zip.
+      - production_tier
+      - skip_capacity_preflight
+      - worker_placement_ads
+      - data_volume_gb
+      # Cluster identity/version knobs — sensible defaults, not customer-facing.
+      - cluster_name
+      - kubernetes_version
+      - cluster_type
+      - cni_type
+      # Worker node internals — derived / fixed WEKA requirements.
+      - node_pool_name
+      - node_boot_volume_gb
+      - node_hugepages
+      - worker_image_os_version
+      - node_shape
+      - node_ocpus
+      - node_memory_gb
+
+  - title: "WEKA (operator + image pull)"
+    variables:
+      - quay_username
+      - quay_password
+      - operator_version
+
+  - title: "WEKA cluster size"
+    variables:
+      - node_count
+
+  - title: "Kubernetes API"
+    variables:
+      - control_plane_is_public
+
+  - title: "Networking"
+    variables:
+      - create_vcn
+      - vcn_id
+
+  - title: "SSH"
+    variables:
+      - ssh_public_key
+
+variables:
+  # Declared here for documentation only — this default does NOT pin anything.
+  # ORM never submits a value for a `visible: false` variable, so Terraform sees
+  # no `flavor` at all and falls back to its own default in variables.tf. The real
+  # pin is in .github/workflows/release.yml, which rewrites that Terraform default
+  # to non-production when building the dev zip.
+  flavor:
+    type: string
+    default: non-production
+    visible: false
+
+  # --- WEKA ---
+  quay_username:
+    title: quay.io robot username
+    description: From https://get.weka.io. Used for the image pull secret.
+    type: string
+    required: true
+  quay_password:
+    title: quay.io robot password
+    description: From https://get.weka.io.
+    type: password
+    required: true
+    sensitive: true
+  operator_version:
+    title: WEKA operator version
+    type: string
+    default: v1.14.1
+    required: true
+
+  # --- Cluster size ---
+  node_count:
+    title: Instance count
+    description: >-
+      Number of worker instances (minimum 6, enough for WEKA to form a cluster).
+      Capacity comes from a per-node block volume, so the instance count sets how
+      many nodes make up the cluster. Frozen after the first apply (changing it
+      would destroy/replace instances).
+    type: number
+    default: 6
+    minimum: 6
+    required: true
+
+  # --- Kubernetes API ---
+  control_plane_is_public:
+    title: Public API endpoint
+    description: >-
+      Give the Kubernetes API a public IP so kubectl works directly. Frozen after
+      first apply (flipping public/private replaces the cluster). Tighten
+      control_plane_allowed_cidrs for real use.
+    type: boolean
+    default: true
+
+  # --- Networking (frozen after first apply) ---
+  create_vcn:
+    title: Create a fresh VCN
+    description: Off = reuse an existing VCN (set vcn_id, and subnets/nsgs via tfvars). Frozen after first apply.
+    type: boolean
+    default: true
+    required: true
+  vcn_id:
+    title: Existing VCN
+    description: Only used when "Create a fresh VCN" is off. Frozen after first apply.
+    type: oci:core:vcn:id
+    required: false
+    visible:
+      not:
+        - create_vcn
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  # --- SSH ---
+  ssh_public_key:
+    title: SSH public key
+    description: Public key injected into worker nodes (paste the contents of your .pub file).
+    type: oci:core:ssh:publickey
+    required: false
+
+# ---------------------------------------------------------------------------
+# Application Information tab — shown after a successful apply.
+# ---------------------------------------------------------------------------
+outputs:
+  console_url:
+    type: link
+    title: "Open the OKE cluster in the OCI Console"
+    visible: true
+  create_kubeconfig_command:
+    type: copyableString
+    title: "Write a kubeconfig (run locally)"
+    visible: true
+  verify_commands:
+    type: copyableString
+    title: "Verify WEKA came up"
+    visible: true
+  weka_sizing:
+    type: string
+    title: "Derived WEKA sizing"
+    visible: true
+  cluster_id:
+    type: copyableString
+    title: "Cluster OCID"
+    visible: true
+  region:
+    type: string
+    title: "Region"
+    visible: true
+  operator_namespace:
+    type: string
+    title: "WEKA operator namespace"
+    visible: true
+  applied_custom_resources:
+    type: string
+    title: "Applied WEKA custom resources"
+    visible: true
+
+outputGroups:
+  - title: "Access your cluster"
+    outputs:
+      - console_url
+      - create_kubeconfig_command
+      - verify_commands
+  - title: "Cluster details"
+    outputs:
+      - weka_sizing
+      - cluster_id
+      - region
+      - operator_namespace
+      - applied_custom_resources
+
+# Primary call-to-action button on the Application Information tab.
+primaryOutputButton: console_url

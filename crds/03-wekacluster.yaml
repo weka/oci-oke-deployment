@@ -1,0 +1,20 @@
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaCluster
+metadata:
+  name: dev
+  namespace: default
+spec:
+  dynamicTemplate:
+    computeContainers: 6
+    driveContainers: 6
+    driveCores: 1
+    numDrives: 1
+  gracefulDestroyDuration: 0s
+  hotSpare: 1
+  image: quay.io/weka.io/weka-in-container:5.1.24
+  imagePullSecret: quay-io-robot-secret
+  ports:
+    basePort: 15000
+  redundancyLevel: 2
+  stripeWidth: 3
+  template: dynamic

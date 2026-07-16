@@ -1,0 +1,235 @@
+title: "WEKA on OKE — Production (local-NVMe DenseIO)"
+description: >-
+  One-click production stack: provisions an OKE cluster with local-NVMe DenseIO
+  workers and installs the WEKA operator, image pull secret, and
+  WekaPolicy/WekaCluster/WekaClient in a single apply. Pick a usable capacity /
+  instance type below — it fixes the worker shape and node count together, and both
+  are frozen after the first apply (a resize would destroy nodes).
+schemaVersion: 1.1.0
+version: "20240101"
+locale: "en"
+
+# WEKA logo on the Application Information tab, embedded as a base64 data URI.
+# ORM does not render arbitrary external logo URLs for non-Marketplace stacks
+# (only Marketplace content URLs), so the SVG is inlined here.
+logoUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0NTYuMDcgNDY4Ljc0Ij48ZGVmcz48c3R5bGU+LmNscy0xe2ZpbGw6IzZiMDBkZDt9PC9zdHlsZT48L2RlZnM+PHRpdGxlPldla2EgVmVydGljYWwgbG9nbyBQdXJwbGU8L3RpdGxlPjxnIGlkPSJMYXllcl8yIiBkYXRhLW5hbWU9IkxheWVyIDIiPjxnIGlkPSJMYXllcl8xLTIiIGRhdGEtbmFtZT0iTGF5ZXIgMSI+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMCwzNzUuNTZIMTEuMzdMMzcuOCw0NTIuNjEsNjMuMTgsMzc1LjNoOC41OWwyNS4zNyw3Ny4zMSwyNi40My03Ny4wNWgxMWwtMzMsOTMuMThIOTIuNjVMNjcuMjcsMzkzLjY3LDQxLjc2LDQ2OC43NEgzM1oiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0xNjEuODUsMzc1LjU2aDY2Ljg3djkuNTJIMTcyLjI5djMxLjU5aDUwLjQ4djkuNTFIMTcyLjI5djMyLjM4aDU3LjA5djkuNTJIMTYxLjg1WiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTI2Mi44NiwzNzUuNTZIMjczLjN2NTUuMjVsNTMuMTMtNTUuMjVoMTMuNDhMMzAwLjI2LDQxNmw0MS4zNyw1Mi4wN0gzMjguNTVMMjkzLDQyMy4yN2wtMTkuNywyMHYyNC44NUgyNjIuODZaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNDA0LjEzLDM3NC45aDkuNzhsNDIuMTYsOTMuMThINDQ0Ljg0TDQzNCw0NDMuNjNIMzgzLjY1bC0xMSwyNC40NUgzNjJabTI1Ljc3LDU5LjM0LTIxLTQ3LjE4LTIxLjE1LDQ3LjE4WiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTMyOS40NS4zMiwzOTYuNywwYTEwLjMsMTAuMywwLDAsMSwxMC4zNSwxMC4zVjc4YTEwLjMsMTAuMywwLDAsMS0xNy41OSw3LjI4TDMyMi4yMSwxNy45QTEwLjMsMTAuMywwLDAsMSwzMjkuNDUuMzJaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMjAuNzUsMTAuNTlWNjUuMUE1Ni42Nyw1Ni42NywwLDAsMCwzNy4yMSwxMDVMMjA4LjI4LDI3Ny4yMmExMC4zLDEwLjMsMCwwLDAsMTcuNi03LjI2VjIxNS40OGE1Ni42NCw1Ni42NCwwLDAsMC0xNi40NS0zOS45MkwzOC4zNiwzLjMzQTEwLjMsMTAuMywwLDAsMCwyMC43NSwxMC41OVoiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0yMDIuMzcsMTAuNTlWNjUuMUE1Ni42Nyw1Ni42NywwLDAsMCwyMTguODMsMTA1TDM4OS45LDI3Ny4yMkExMC4zLDEwLjMsMCwwLDAsNDA3LjUxLDI3MFYyMTUuNDhhNTYuNjUsNTYuNjUsMCwwLDAtMTYuNDYtMzkuOTJMMjIwLDMuMzNBMTAuMywxMC4zLDAsMCwwLDIwMi4zNywxMC41OVoiLz48L2c+PC9nPjwvc3ZnPg=="
+
+# Blue info box on the Create stack page — prerequisites + the DenseIO-capacity
+# and immutability caveats, shown before the user runs anything.
+informationalText: >-
+  Prerequisites: a get.weka.io robot account (quay.io username + password) for the
+  image pull secret. Pick a cluster capacity below — the options are labelled by WEKA
+  usable TB and the worker instance type: 31 TB is a minimal 8-node cluster; 98–588 TB
+  are 21-node VM.DenseIO.E5.Flex clusters that grow per-node NVMe; 783 TB and
+  1175 TB are 21-node bare-metal (BM.DenseIO.E4/E5.128) clusters. The choice fixes the
+  worker instance type AND node count, and BOTH are frozen after the first apply —
+  changing them would destroy nodes, so deploy a new stack for a different
+  capacity. NVMe capacity is scarce: if an apply
+  fails with "Out of host capacity", try another region or pin an availability
+  domain. After apply, the Application Information tab gives you a one-click
+  kubeconfig command and a link straight to the cluster.
+
+variableGroups:
+  - title: "Hidden"
+    visible: false
+    variables:
+      - config_file_profile
+      - oci_cli_auth
+      - region
+      - home_region
+      - tenancy_ocid
+      - compartment_ocid
+      - control_plane_allowed_cidrs
+      - vcn_cidrs
+      - subnets
+      - nsgs
+      - ssh_public_key_path
+      # Flavor is pinned to production for this zip (Terraform default) and never
+      # shown; the dev zip is a separate download.
+      - flavor
+      # Cluster identity/version knobs — sensible defaults, not customer-facing.
+      - cluster_name
+      - kubernetes_version
+      - cluster_type
+      - cni_type
+      # Worker node internals — derived from the tier / fixed WEKA requirements.
+      - node_pool_name
+      - node_boot_volume_gb
+      - node_hugepages
+      - worker_image_os_version
+      # Sizing internals — derived from the tier; not customer-facing.
+      - node_shape
+      - node_ocpus
+      - node_memory_gb
+      - node_count
+      - worker_placement_ads
+      # Non-production-only; unused here.
+      - data_volume_gb
+
+  - title: "WEKA (operator + image pull)"
+    variables:
+      - quay_username
+      - quay_password
+      - operator_version
+
+  - title: "WEKA cluster size"
+    variables:
+      - production_tier
+      - skip_capacity_preflight
+
+  - title: "Kubernetes API"
+    variables:
+      - control_plane_is_public
+
+  - title: "Networking"
+    variables:
+      - create_vcn
+      - vcn_id
+
+  - title: "SSH"
+    variables:
+      - ssh_public_key
+
+variables:
+  # --- WEKA ---
+  quay_username:
+    title: quay.io robot username
+    description: From https://get.weka.io. Used for the image pull secret.
+    type: string
+    required: true
+  quay_password:
+    title: quay.io robot password
+    description: From https://get.weka.io.
+    type: password
+    required: true
+    sensitive: true
+  operator_version:
+    title: WEKA operator version
+    type: string
+    default: v1.14.1
+    required: true
+
+  # --- Cluster capacity (fixed shape + node count, frozen after first apply) ---
+  # The enum VALUES are the customer-facing labels (ORM renders them verbatim), so
+  # they name usable capacity and instance type. Keep them byte-identical to
+  # local.tier_specs (main.tf) and the validation list in variables.tf.
+  production_tier:
+    title: Cluster capacity and worker instance type
+    description: >-
+      Each option fixes the worker instance type AND node count (both frozen after
+      first apply — a resize would destroy nodes; deploy a new stack for a different
+      capacity). Capacity shown is WEKA usable, after protection and filesystem
+      overhead; each NVMe drive is 6.8 TB. The 8-node option runs single protection
+      (5+2+1); every 21-node option runs double protection (16+4+1). For more than
+      1175 TB usable, deploy a separate cluster.
+    type: enum
+    enum:
+      - 31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
+      - 98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
+      - 196 TB usable - 21 x VM.DenseIO.E5.Flex (16 OCPU, 2 NVMe)
+      - 294 TB usable - 21 x VM.DenseIO.E5.Flex (24 OCPU, 3 NVMe)
+      - 392 TB usable - 21 x VM.DenseIO.E5.Flex (32 OCPU, 4 NVMe)
+      - 490 TB usable - 21 x VM.DenseIO.E5.Flex (40 OCPU, 5 NVMe)
+      - 588 TB usable - 21 x VM.DenseIO.E5.Flex (48 OCPU, 6 NVMe)
+      - 783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)
+      - 1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)
+    default: 31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
+    required: true
+  skip_capacity_preflight:
+    title: Skip NVMe capacity preflight
+    description: >-
+      Before building, the stack checks DenseIO host capacity across the region's
+      availability domains and stops early with guidance if none is free. Turn
+      this on to bypass that check — e.g. if the capacity report is wrong for your
+      tenancy, or you lack permission to read it.
+    type: boolean
+    default: false
+
+  # --- Kubernetes API ---
+  control_plane_is_public:
+    title: Public API endpoint
+    description: >-
+      Give the Kubernetes API a public IP so kubectl works directly. Frozen after
+      first apply (flipping public/private replaces the cluster). Tighten
+      control_plane_allowed_cidrs for real use.
+    type: boolean
+    default: true
+
+  # --- Networking (frozen after first apply) ---
+  create_vcn:
+    title: Create a fresh VCN
+    description: Off = reuse an existing VCN (set vcn_id, and subnets/nsgs via tfvars). Frozen after first apply.
+    type: boolean
+    default: true
+    required: true
+  vcn_id:
+    title: Existing VCN
+    description: Only used when "Create a fresh VCN" is off. Frozen after first apply.
+    type: oci:core:vcn:id
+    required: false
+    visible:
+      not:
+        - create_vcn
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  # --- SSH ---
+  ssh_public_key:
+    title: SSH public key
+    description: Public key injected into worker nodes (paste the contents of your .pub file).
+    type: oci:core:ssh:publickey
+    required: false
+
+# ---------------------------------------------------------------------------
+# Application Information tab — shown after a successful apply.
+# ---------------------------------------------------------------------------
+outputs:
+  console_url:
+    type: link
+    title: "Open the OKE cluster in the OCI Console"
+    visible: true
+  create_kubeconfig_command:
+    type: copyableString
+    title: "Write a kubeconfig (run locally)"
+    visible: true
+  verify_commands:
+    type: copyableString
+    title: "Verify WEKA came up"
+    visible: true
+  weka_sizing:
+    type: string
+    title: "Derived WEKA sizing"
+    visible: true
+  cluster_id:
+    type: copyableString
+    title: "Cluster OCID"
+    visible: true
+  region:
+    type: string
+    title: "Region"
+    visible: true
+  operator_namespace:
+    type: string
+    title: "WEKA operator namespace"
+    visible: true
+  applied_custom_resources:
+    type: string
+    title: "Applied WEKA custom resources"
+    visible: true
+
+outputGroups:
+  - title: "Access your cluster"
+    outputs:
+      - console_url
+      - create_kubeconfig_command
+      - verify_commands
+  - title: "Cluster details"
+    outputs:
+      - weka_sizing
+      - cluster_id
+      - region
+      - operator_namespace
+      - applied_custom_resources
+
+# Primary call-to-action button on the Application Information tab.
+primaryOutputButton: console_url

@@ -1,0 +1,12 @@
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaPolicy
+metadata:
+  name: sign-drives-policy
+  namespace: default
+spec:
+  imagePullSecret: quay-io-robot-secret
+  payload:
+    interval: 5m0s
+    signDrivesPayload:
+      type: all-not-root
+  type: sign-drives

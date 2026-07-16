@@ -1,0 +1,50 @@
+# Copy to terraform.tfvars and fill in. This ONE stack does cluster + WEKA.
+
+# REQUIRED — your OCI account specifics:
+# NOTE: OCI Resource Manager auto-populates tenancy_ocid and compartment_ocid; only set them for local/CLI runs.
+tenancy_ocid     = "ocid1.tenancy.oc1..xxxxx"
+compartment_ocid = "ocid1.compartment.oc1..xxxxx"
+
+# REQUIRED — quay.io robot creds from https://get.weka.io (sensitive):
+quay_username = "weka.io+robot"
+quay_password = "..."
+
+# SSH key: content (ORM) or path (local). Content wins when set.
+# ssh_public_key      = "ssh-ed25519 AAAA... you@host"
+# ssh_public_key_path = "~/.ssh/id_rsa.pub"
+
+# Auth for the `oci` CLI calls (subnet attach + OKE token). Pick per environment:
+#   - ORM runner / Cloud Shell: leave both unset (default oci_cli_auth = "" => no
+#     --auth flag; the environment's delegation/session token is used).
+#   - Local:                    config_file_profile = "DEFAULT"
+#   - operator host:            oci_cli_auth = "instance_principal"
+# config_file_profile = "DEFAULT"
+# region              = "us-phoenix-1"
+
+# --- Workers: converged WEKA nodes (optional) ---
+# flavor is pinned per zip (prod = production, dev = non-production) and hidden in
+# the ORM form. For local CLI runs set it explicitly:
+# flavor           = "production"      # production:     DenseIO.E5/BM + local NVMe (default)
+#                                      # non-production: Standard.E5.Flex + block volume
+#
+# production flavor — pick a capacity + instance type (fixes shape AND node count;
+# frozen after apply). The value is the label itself; copy one verbatim from
+# local.tier_specs in main.tf:
+# production_tier = "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)"
+#   others: 98 / 196 / 294 / 392 / 490 / 588 TB usable - 21 x VM.DenseIO.E5.Flex (8->48 OCPU, 1->6 NVMe)
+#           783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)
+#           1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)
+#
+# non-production flavor — you set the instance count + per-node block volume:
+# node_count       = 6                 # minimum 6
+# data_volume_gb   = 100               # block-volume size (GB); ignored for production
+
+# --- Advanced overrides (optional; null = use the selected option / flavor default; not shown in the ORM form) ---
+# node_ocpus     = 16                        # override the selected option (ignored on BM shapes)
+# node_memory_gb = 192                       # override the selected option (ignored on BM shapes)
+# node_shape     = "VM.DenseIO.E5.Flex"   # override the selected option's shape
+# node_hugepages = 16000                     # override; default = 1000 x OCPU (production)
+
+# --- Optional cluster/operator overrides (defaults shown) ---
+# cluster_name     = "weka-cluster"
+# operator_version = "v1.14.1"

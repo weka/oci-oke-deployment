@@ -1,0 +1,8 @@
+oci-oke-deployment
+Copyright 2026 WekaIO, Ltd.
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It uses, but does not include, the terraform-oci-oke module
+(https://github.com/oracle-terraform-modules/terraform-oci-oke), which is
+licensed by Oracle under the Universal Permissive License (UPL) 1.0.

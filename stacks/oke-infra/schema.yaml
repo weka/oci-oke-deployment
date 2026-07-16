@@ -1,0 +1,198 @@
+title: "WEKA on OKE — Infrastructure"
+description: >-
+  Managed OKE cluster (converged node pool) prepared for WEKA: hugepages,
+  intra-VCN data-plane security list, and your chosen worker flavor
+  (non-production = Standard + block volume, default; production = DenseIO +
+  local NVMe). Layer the WEKA operator afterwards with the "weka-layer" stack.
+schemaVersion: 1.1.0
+version: "20240101"
+locale: "en"
+
+# Variables ORM injects or that are advanced/tfvars-only; hidden from the form.
+variableGroups:
+  - title: "Hidden"
+    visible: false
+    variables:
+      - config_file_profile
+      - oci_cli_auth
+      - region
+      - home_region
+      - tenancy_ocid
+      - compartment_ocid
+      - control_plane_allowed_cidrs
+      - vcn_cidrs
+      - subnets
+      - nsgs
+      - ssh_public_key_path
+
+  - title: "Cluster"
+    variables:
+      - cluster_name
+      - kubernetes_version
+      - cluster_type
+      - cni_type
+      - control_plane_is_public
+
+  - title: "Worker node pool (converged WEKA nodes)"
+    variables:
+      - flavor
+      - data_volume_gb
+      - node_pool_name
+      - node_count
+      - node_boot_volume_gb
+      - node_hugepages
+      - worker_image_os_version
+
+  - title: "Advanced sizing (optional overrides)"
+    variables:
+      - node_shape
+      - node_ocpus
+      - node_memory_gb
+
+  - title: "Networking"
+    variables:
+      - create_vcn
+      - vcn_id
+
+  - title: "SSH"
+    variables:
+      - ssh_public_key
+
+variables:
+  # --- Cluster ---
+  cluster_name:
+    title: Cluster name
+    type: string
+    required: true
+    default: weka-oke
+  kubernetes_version:
+    title: Kubernetes version
+    type: string
+    required: true
+    default: v1.34.2
+  cluster_type:
+    title: Cluster type
+    type: enum
+    enum: [basic, enhanced]
+    default: basic
+    required: true
+  cni_type:
+    title: Pod networking (CNI)
+    type: enum
+    enum: [flannel, npn]
+    default: flannel
+    required: true
+  control_plane_is_public:
+    title: Public API endpoint
+    description: Give the Kubernetes API a public IP so kubectl works directly. Tighten control_plane_allowed_cidrs for real use.
+    type: boolean
+    default: true
+
+  # --- Workers ---
+  flavor:
+    title: Cluster flavor
+    description: >-
+      Drive topology / shape / pool mode. non-production (default):
+      VM.Standard.E5.Flex, instance-pool, block-volume drives — abundant quota,
+      good for operator/CSI testing. production: VM.DenseIO.E5.Flex, node-pool,
+      local NVMe — best IO, but DenseIO quota is limited (check AD capacity).
+    type: enum
+    enum: [non-production, production]
+    default: non-production
+    required: true
+  data_volume_gb:
+    title: Data volume size (GB)
+    description: >-
+      Size of the paravirtualized block-volume data disk attached per worker node.
+      Only used for the non-production flavor (Standard.E5.Flex + instance-pool);
+      ignored when flavor is production (local NVMe is used instead). Minimum 50.
+    type: number
+    default: 100
+    minimum: 50
+    required: false
+    visible:
+      eq:
+        - flavor
+        - non-production
+  node_pool_name:
+    title: Node pool name
+    type: string
+    default: converged
+    required: true
+  node_count:
+    title: Worker count
+    type: number
+    default: 6
+    minimum: 1
+    required: true
+  node_boot_volume_gb:
+    title: Boot volume (GB)
+    type: number
+    default: 200
+    required: true
+  node_hugepages:
+    title: 2Mi hugepages per node
+    description: WEKA requirement. 8000 x 2Mi ~= 15.6 GB.
+    type: number
+    default: 8000
+    required: true
+  worker_image_os_version:
+    title: Worker OS version
+    description: Oracle Linux 8 avoids the broken Ubuntu-OKE python3-venv that blocks node init.
+    type: string
+    default: "8"
+    required: true
+
+  # --- Advanced sizing (optional overrides) ---
+  node_shape:
+    title: Node shape override
+    description: >-
+      Optional. Worker node shape. When left blank, derived from flavor
+      (VM.DenseIO.E5.Flex for production, VM.Standard.E5.Flex for non-production).
+      Overriding shape while keeping the flavor-driven pool mode (worker_mode) is
+      a foot-gun — only set this if you know what you are doing.
+    type: string
+    required: false
+  node_ocpus:
+    title: OCPU count override
+    description: >-
+      Optional. OCPUs per worker node. When left blank, derived from flavor
+      (8 for production, 10 for non-production). Example: set 16 to provision a
+      2-NVMe DenseIO node under the production flavor.
+    type: number
+    required: false
+    minimum: 1
+  node_memory_gb:
+    title: Memory (GB) override
+    description: >-
+      Optional. Memory (GB) per worker node. When left blank, derived from flavor
+      (96 for production, 80 for non-production). OCI allows 1–48 GB/OCPU for
+      DenseIO.E5.Flex; only NVMe count is fixed at 1 per 8 OCPU.
+    type: number
+    required: false
+    minimum: 1
+
+  # --- Networking ---
+  create_vcn:
+    title: Create a fresh VCN
+    description: Off = reuse an existing VCN (set vcn_id, and subnets/nsgs via tfvars).
+    type: boolean
+    default: true
+    required: true
+  vcn_id:
+    title: Existing VCN
+    description: Only used when "Create a fresh VCN" is off.
+    type: oci:core:vcn:id
+    required: false
+    visible:
+      not:
+        - create_vcn
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  # --- SSH ---
+  ssh_public_key:
+    title: SSH public key
+    description: Public key injected into worker nodes (paste the contents of your .pub file).
+    type: oci:core:ssh:publickey
+    required: false

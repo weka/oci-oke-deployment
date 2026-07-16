@@ -1,0 +1,14 @@
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaPolicy
+metadata:
+  name: ensure-nics-policy
+  namespace: default
+spec:
+  image: quay.io/weka.io/weka-in-container:5.1.24
+  imagePullSecret: quay-io-robot-secret
+  payload:
+    ensureNICsPayload:
+      dataNICsNumber: 5
+      type: oci
+    interval: 5m0s
+  type: ensure-nics

@@ -1,0 +1,372 @@
+# Inputs for the OKE cluster. Sizing/topology have sensible defaults; the
+# account-specific values (compartment_ocid, tenancy_ocid) are required — set them
+# in terraform.tfvars (see terraform.tfvars.example) or via -var / TF_VAR_*.
+
+# ---------------------------------------------------------------------------
+# Auth / tenancy
+# ---------------------------------------------------------------------------
+variable "config_file_profile" {
+  description = <<-EOT
+    Profile in ~/.oci/config to authenticate with for LOCAL / Cloud Shell runs
+    (e.g. "DEFAULT"). Leave null when running in OCI Resource Manager: ORM injects
+    resource-principal credentials automatically, and a null profile also switches
+    the weka-data security-list attach (weka_data_network.tf) to
+    `--auth resource_principal` instead of `--profile`.
+  EOT
+  type        = string
+  default     = null
+}
+
+variable "oci_cli_auth" {
+  description = <<-EOT
+    Auth mode for the out-of-band `oci` CLI call (the worker-subnet security-list
+    attach in weka_data_network.tf), passed as `--auth <mode>`. Only used when
+    config_file_profile is null:
+      - ""  (empty, default) — no --auth flag; the environment is pre-authenticated.
+        Correct for BOTH the OCI Resource Manager runner (delegation/OBO token) and
+        OCI Cloud Shell (session token) — verified: the ORM runner has the oci CLI
+        and works with no flag, but NOT with --auth resource_principal.
+      - "instance_principal"  — an operator/compute host in a dynamic group.
+      - "resource_principal"  — only where OCI_RESOURCE_PRINCIPAL_* is set (NOT the ORM runner).
+    Ignored when config_file_profile is set (local runs use --profile).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "region" {
+  # No default ON PURPOSE. In the ORM console `region` is a reserved Resource
+  # Manager variable auto-populated with the region the stack runs in, so leaving
+  # it unset makes the stack deploy WHERE IT IS CREATED instead of silently
+  # defaulting to some other region. For local/CLI runs, set it in your tfvars.
+  description = "OCI region for the OKE cluster (e.g. us-phoenix-1, us-ashburn-1, eu-frankfurt-1). ORM auto-populates this with the stack's region; set it in tfvars for local runs."
+  type        = string
+}
+
+variable "home_region" {
+  description = "Tenancy home region (identity ops). Defaults to var.region when null."
+  type        = string
+  default     = null
+}
+
+variable "tenancy_ocid" {
+  description = "Tenancy OCID. OCI Resource Manager auto-populates this reserved variable; for local/CLI runs set it in terraform.tfvars."
+  type        = string
+}
+
+variable "compartment_ocid" {
+  description = "Compartment for all resources. Auto-populated by OCI Resource Manager (reserved variable); defaults to the compartment the stack is created in."
+  type        = string
+}
+
+# ---------------------------------------------------------------------------
+# SSH — provide the key as CONTENT (ssh_public_key) or as a file PATH
+# (ssh_public_key_path). The module prefers content when set and only reads the
+# path otherwise, so use ssh_public_key in the ORM runner (no local files there)
+# and ssh_public_key_path for local convenience.
+# ---------------------------------------------------------------------------
+variable "ssh_public_key" {
+  description = "SSH public key CONTENT injected into worker nodes (use in the ORM runner). Takes precedence over ssh_public_key_path when set."
+  type        = string
+  default     = null
+}
+
+variable "ssh_public_key_path" {
+  description = "Path to the SSH public key file injected into worker nodes (local/Cloud Shell). Used only when ssh_public_key is null. Leave null in the ORM runner (no local files there); set a path for local runs, e.g. \"~/.ssh/id_rsa.pub\"."
+  type        = string
+  default     = null
+}
+
+# ---------------------------------------------------------------------------
+# Cluster
+# ---------------------------------------------------------------------------
+variable "cluster_name" {
+  description = "Name of the OKE cluster."
+  type        = string
+  default     = "weka-cluster"
+}
+
+variable "kubernetes_version" {
+  description = "Kubernetes version for the OKE control plane and node pool."
+  type        = string
+  default     = "v1.36.1"
+}
+
+variable "cluster_type" {
+  description = "OKE cluster type: basic or enhanced."
+  type        = string
+  default     = "basic"
+}
+
+variable "cni_type" {
+  description = "Pod networking CNI: flannel or npn."
+  type        = string
+  default     = "flannel"
+}
+
+variable "control_plane_is_public" {
+  description = "Give the Kubernetes API endpoint a public IP so kubectl works directly from your laptop."
+  type        = bool
+  default     = true
+}
+
+variable "control_plane_allowed_cidrs" {
+  description = "CIDRs allowed to reach the public control plane. The default is open; tighten to your IP for anything real."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+# ---------------------------------------------------------------------------
+# Flavor — the single dial that determines drive topology and pool mode.
+#
+# production:     VM.DenseIO.E5.Flex, node-pool (managed OKE).
+#                 Local NVMe is discovered as weka.io/drives — no block volume.
+#                 OCI allows 1–48 GB/OCPU for DenseIO.E5.Flex; only NVMe count
+#                 is fixed at 1 per 8 OCPU. Default derives from flavor (8 OCPU / 96 GB).
+#                 Use for real WEKA testing with best drive performance.
+#                 DenseIO quota is limited; check AD capacity before provisioning.
+#
+# non-production: VM.Standard.E5.Flex, instance-pool (self-managed).
+#                 No local NVMe; WEKA drives come from an attached block volume
+#                 (paravirtualized, size = var.data_volume_gb, default 100 GB).
+#                 Standard shapes are widely available. Good for operator/CSI
+#                 integration testing where IO performance is not the focus.
+#
+# Shape, OCPU, and memory are fully determined by the flavor (see locals in
+# main.tf). node_count, node_boot_volume_gb, and node_hugepages remain as
+# explicit overrides because they are independent of drive topology.
+# ---------------------------------------------------------------------------
+variable "flavor" {
+  description = <<-EOT
+    Cluster flavor — controls drive topology, node shape, and pool mode. It is
+    hidden from the ORM form in both zips, so it is effectively an internal
+    constant. The default below is what the PRODUCTION zip uses; the release
+    workflow rewrites it to non-production when building the dev zip. Do not
+    move that pin into schema-dev.yaml — ORM does not submit hidden variables,
+    so a schema default silently never reaches Terraform.
+      "production": DenseIO shape from production_tier, node-pool (managed OKE),
+        local NVMe as WEKA drives. Best drive performance. DenseIO quota is limited
+        — the capacity.tf preflight checks AD capacity before provisioning.
+      "non-production": VM.Standard.E5.Flex, instance-pool, paravirtualized block
+        volume as WEKA drives. Standard shapes have abundant quota; ideal for
+        operator/CSI integration testing where raw IO throughput is not the goal.
+  EOT
+  type        = string
+  default     = "production"
+  validation {
+    condition     = contains(["production", "non-production"], var.flavor)
+    error_message = "flavor must be one of: production, non-production"
+  }
+}
+
+variable "data_volume_gb" {
+  description = "Size (GB) of the paravirtualized block-volume data disk attached per worker node in non-production flavor. Ignored for production (local NVMe is used instead). Minimum 50, default 100."
+  type        = number
+  default     = 100
+}
+
+# ---------------------------------------------------------------------------
+# Production sizing — a single fixed choice that pins worker SHAPE and node COUNT.
+#
+# The allowed values NAME the usable capacity and the instance type, because ORM
+# renders enum values verbatim in the dropdown (no separate label/value in schema
+# 1.1.0). Each value maps (main.tf local.tier_specs) to shape + OCPU + drives/node
+# + count. Shape AND count are frozen after first apply by guard.tf (a resize would
+# destroy nodes). Only used when flavor = production; non-production sizing uses
+# var.node_count directly.
+#
+#   31 TB usable    8  x VM.DenseIO.E5.Flex (8 OCPU,   1x6.8TB)  single prot. 5+2+1
+#   98 TB usable    21 x VM.DenseIO.E5.Flex (8 OCPU,   1x6.8TB)  double prot. 16+4+1
+#   196 TB usable   21 x VM.DenseIO.E5.Flex (16 OCPU,  2x6.8TB)
+#   294 TB usable   21 x VM.DenseIO.E5.Flex (24 OCPU,  3x6.8TB)
+#   392 TB usable   21 x VM.DenseIO.E5.Flex (32 OCPU,  4x6.8TB)
+#   490 TB usable   21 x VM.DenseIO.E5.Flex (40 OCPU,  5x6.8TB)
+#   588 TB usable   21 x VM.DenseIO.E5.Flex (48 OCPU,  6x6.8TB)
+#   783 TB usable   21 x BM.DenseIO.E4.128     (128 core, 8x6.8TB)
+#   1175 TB usable  21 x BM.DenseIO.E5.128     (128 core, 12x6.8TB)
+# ---------------------------------------------------------------------------
+variable "production_tier" {
+  description = <<-EOT
+    Production cluster capacity + worker instance type (production flavor only).
+    The value fixes the worker shape AND node count; both are frozen after first
+    apply. 31 TB usable is a minimal 8-node cluster with single protection (5+2+1).
+    98–588 TB usable are 21-node VM.DenseIO.E5.Flex clusters with double
+    protection (16+4+1), growing per-node from 1 to 6 local 6.8 TB NVMe drives.
+    783 TB and 1175 TB usable are 21-node bare-metal clusters (BM.DenseIO.E4.128
+    and BM.DenseIO.E5.128). For more capacity, deploy a separate cluster.
+    Keep this list in sync with local.tier_specs (main.tf) and the schema enums.
+  EOT
+  type        = string
+  default     = "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)"
+  validation {
+    condition = contains([
+      "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)",
+      "98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)",
+      "196 TB usable - 21 x VM.DenseIO.E5.Flex (16 OCPU, 2 NVMe)",
+      "294 TB usable - 21 x VM.DenseIO.E5.Flex (24 OCPU, 3 NVMe)",
+      "392 TB usable - 21 x VM.DenseIO.E5.Flex (32 OCPU, 4 NVMe)",
+      "490 TB usable - 21 x VM.DenseIO.E5.Flex (40 OCPU, 5 NVMe)",
+      "588 TB usable - 21 x VM.DenseIO.E5.Flex (48 OCPU, 6 NVMe)",
+      "783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)",
+      "1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)",
+    ], var.production_tier)
+    error_message = "production_tier must be one of the listed capacity/shape options, e.g. \"31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)\" — see local.tier_specs in main.tf."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Advanced sizing overrides (optional).
+#
+# When null (default), each value is derived from var.flavor (see locals in
+# main.tf). Set any of these to override the flavor default — for example,
+# node_ocpus = 16 to get a 2-NVMe DenseIO node under the production flavor.
+#
+# NOTE: worker_mode (node-pool vs instance-pool) remains tied to flavor and
+# cannot be overridden here. Choosing a shape that mismatches the flavor-driven
+# pool mode (e.g. a DenseIO shape with non-production/instance-pool) is a
+# documented foot-gun — it is not prevented but also not recommended.
+# ---------------------------------------------------------------------------
+variable "node_shape" {
+  description = "Optional override for the worker node shape. When null, derived from production_tier (production) or VM.Standard.E5.Flex (non-production)."
+  type        = string
+  default     = null
+}
+
+variable "node_ocpus" {
+  description = "Optional override for OCPUs per worker node. When null, derived from production_tier (production) or 10 (non-production). Ignored for the bare-metal options (BM shapes have fixed OCPU)."
+  type        = number
+  default     = null
+}
+
+variable "node_memory_gb" {
+  description = "Optional override for memory (GB) per worker node. When null, derived from production_tier (production, 12 GB/OCPU) or 80 (non-production). Ignored for the bare-metal options (BM shapes have fixed memory)."
+  type        = number
+  default     = null
+}
+
+# ---------------------------------------------------------------------------
+# Worker node pool (converged WEKA nodes).
+#
+# node_count, node_boot_volume_gb, and node_hugepages remain explicit because
+# they are independent of flavor. Shape, OCPU, and memory are derived from
+# var.flavor by default but can be overridden with the variables above.
+# ---------------------------------------------------------------------------
+variable "node_pool_name" {
+  description = "Name of the worker node pool."
+  type        = string
+  default     = "converged"
+}
+
+variable "node_count" {
+  description = "Number of worker nodes (non-production flavor). Ignored for production, where the count is fixed by production_tier. Minimum 6."
+  type        = number
+  default     = 6
+  validation {
+    condition     = var.node_count >= 6
+    error_message = "node_count must be at least 6 (WEKA needs enough nodes to form a cluster)."
+  }
+}
+
+variable "skip_capacity_preflight" {
+  description = <<-EOT
+    Skip the production NVMe host-capacity preflight (see capacity.tf). The
+    preflight hard-fails early when no availability domain has free DenseIO
+    capacity for the worker shape; set this true to bypass it — e.g. if the
+    capacity report is wrong for your tenancy, or your tenancy lacks the
+    "inspect compute-capacity-reports" permission. Ignored for non-production.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "worker_placement_ads" {
+  description = <<-EOT
+    Comma-separated availability-domain NUMBERS to place worker nodes in (e.g. "1,2").
+    Empty (default) uses all ADs. Use it to steer the DenseIO node pool away from ADs
+    that are out of host capacity (check with `oci compute compute-capacity-report`).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "node_boot_volume_gb" {
+  description = "Boot volume size (GB) per worker node."
+  type        = number
+  default     = 200
+}
+
+variable "node_hugepages" {
+  description = <<-EOT
+    Optional override for the number of 2Mi hugepages reserved per worker node
+    (WEKA DPDK requirement). When null (default), it is derived in main.tf: 1000
+    pages per OCPU for production (8000 ~= 15.6 GB at 8 OCPU, scaling up so larger
+    tiers keep headroom) and 8000 for non-production. The operator sizes each WEKA
+    container's hugepages itself; the node only needs enough total reserved.
+  EOT
+  type        = number
+  default     = null
+}
+
+variable "worker_image_os_version" {
+  description = "OKE worker image OS version. Oracle Linux 8 avoids the broken Ubuntu-OKE python3-venv that blocks the node init."
+  type        = string
+  default     = "8"
+}
+
+# ---------------------------------------------------------------------------
+# Networking
+#   Default: module builds a fresh VCN (create_vcn = true).
+#   To reuse an existing VCN instead, set create_vcn = false and provide
+#   vcn_id + subnets + nsgs (see terraform.tfvars.example).
+# ---------------------------------------------------------------------------
+variable "create_vcn" {
+  description = "Create a fresh VCN (true) or reuse an existing one via vcn_id/subnets/nsgs (false)."
+  type        = bool
+  default     = true
+}
+
+variable "vcn_cidrs" {
+  description = "IPv4 CIDR blocks for a freshly created VCN."
+  type        = list(string)
+  default     = ["10.0.0.0/16"]
+}
+
+variable "vcn_id" {
+  description = "Existing VCN OCID to reuse. Only used when create_vcn = false."
+  type        = string
+  default     = null
+}
+
+variable "subnets" {
+  description = "Override the module subnets map. null => module defaults (fresh subnets). When reusing existing network, set { cp = { id = ... }, workers = { id = ... }, pub_lb = { id = ... } }."
+  type        = any
+  default     = null
+}
+
+variable "nsgs" {
+  description = "Override the module NSG map. null => module defaults. When reusing existing network, set e.g. { cp = { id = ... }, workers = { id = ... } }."
+  type        = any
+  default     = null
+}
+
+# ---------------------------------------------------------------------------
+# WEKA layer (operator + custom resources) — this stack installs it in the SAME
+# apply as the cluster. quay.io robot creds from https://get.weka.io.
+# ---------------------------------------------------------------------------
+variable "quay_username" {
+  description = "quay.io robot username (image pull secret)."
+  type        = string
+  sensitive   = true
+}
+
+variable "quay_password" {
+  description = "quay.io robot password (image pull secret)."
+  type        = string
+  sensitive   = true
+}
+
+variable "operator_version" {
+  description = "WEKA operator Helm chart version."
+  type        = string
+  default     = "v1.14.1"
+}

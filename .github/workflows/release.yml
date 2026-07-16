@@ -1,0 +1,60 @@
+name: Release one-click stack zips
+
+# On a version tag push (e.g. v1.0.0), build TWO self-contained zips from the
+# all-in-one stack (stacks/oke-weka) and attach them to the GitHub Release:
+#   - oke-weka-prod.zip  (production, local-NVMe DenseIO tiers)  <- schema-prod.yaml
+#   - oke-weka-dev.zip   (non-production, block-volume drives)   <- schema-dev.yaml
+# The two zips share the same Terraform; they differ only in the bundled
+# schema.yaml (which pins the flavor and exposes only that variant's sizing).
+# The stable URLs
+#   https://github.com/<owner>/<repo>/releases/latest/download/oke-weka-prod.zip
+#   https://github.com/<owner>/<repo>/releases/latest/download/oke-weka-dev.zip
+# are what the two "Deploy to Oracle Cloud" buttons point at.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {} # allow manual runs
+
+permissions:
+  contents: write # create releases + upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [prod, dev]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build oke-weka-${{ matrix.variant }}.zip
+        run: |
+          cd stacks/oke-weka
+          # Select the variant's schema as the required schema.yaml at the zip root.
+          cp "schema-${{ matrix.variant }}.yaml" schema.yaml
+
+          # Pin the flavor in TERRAFORM, not just in the schema. ORM does not
+          # submit values for variables marked `visible: false`, so a schema
+          # `default:` on a hidden variable never reaches Terraform — the dev zip
+          # would silently fall back to variables.tf's default (production) and
+          # build DenseIO nodes. Rewriting the default is immune to variable
+          # precedence: nothing in ORM can override it, because ORM sends nothing.
+          if [ "${{ matrix.variant }}" = "dev" ]; then
+            perl -0pi -e 's/(variable "flavor" \{.*?\n  default     = )"production"/$1"non-production"/s' variables.tf
+            grep -q 'default     = "non-production"' variables.tf \
+              || { echo "::error::failed to pin flavor=non-production in variables.tf"; exit 1; }
+          fi
+
+          # Zip the stack CONTENTS (schema.yaml + crds/ bundled). Exclude the raw
+          # schema variants and local-only artifacts.
+          zip -qr "${GITHUB_WORKSPACE}/oke-weka-${{ matrix.variant }}.zip" . \
+            -x 'schema-prod.yaml' 'schema-dev.yaml' \
+               '.terraform/*' '*.tfstate*' 'terraform.tfvars' '*.auto.tfvars' 'orm-vars.json'
+          unzip -l "${GITHUB_WORKSPACE}/oke-weka-${{ matrix.variant }}.zip"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: oke-weka-${{ matrix.variant }}.zip
+          fail_on_unmatched_files: true

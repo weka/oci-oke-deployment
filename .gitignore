@@ -1,0 +1,16 @@
+.terraform/
+# Commit .terraform.lock.hcl for reproducible provider versions (no secrets in it).
+terraform.tfvars
+*.tfvars.local
+*.auto.tfvars
+# Saved deploy inputs (contain quay creds) — never commit.
+orm-vars.json
+*.tfstate
+*.tfstate.*
+crash.log
+*.yaml.kubeconfig
+# schema.yaml is generated at build time from schema-prod.yaml / schema-dev.yaml
+# (see .github/workflows/release.yml); the variant files are the source of truth.
+stacks/oke-weka/schema.yaml
+
+.terraform.lock.hcl

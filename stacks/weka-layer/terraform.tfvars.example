@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and fill in.
+#
+# cluster_id + region come straight from the oke-infra stack outputs:
+#   terraform -chdir=../oke-infra output -raw cluster_id
+#   terraform -chdir=../oke-infra output -raw region
+
+cluster_id = "ocid1.cluster.oc1.phx.aaaa..."
+region     = "us-phoenix-1"
+
+# Auth for the oci CLI token mint + oci provider. Pick per environment:
+#   - ORM runner / Cloud Shell: leave both unset (default oci_cli_auth = "" => no --auth
+#                               flag; the environment's delegation/session token is used).
+#   - Local:                    config_file_profile = "DEFAULT"
+#   - operator host:            oci_cli_auth = "instance_principal"
+# config_file_profile = "DEFAULT"
+
+# quay.io robot credentials from https://get.weka.io (sensitive).
+quay_username = "weka.io+robot"
+quay_password = "..."
+
+# operator_version = "v1.14.1"

@@ -1,0 +1,54 @@
+title: "WEKA on OKE — WEKA layer"
+description: >-
+  Installs the WEKA operator, quay.io image pull secrets, and the
+  WekaPolicy/WekaCluster/WekaClient custom resources onto an existing OKE cluster.
+  NOTE: k8s auth uses the `oci ce cluster generate-token` exec plugin, so apply
+  this from an environment with the oci CLI (OCI Cloud Shell / local), not the bare
+  Resource Manager runner.
+schemaVersion: 1.1.0
+version: "20240101"
+locale: "en"
+
+variableGroups:
+  - title: "Hidden"
+    visible: false
+    variables:
+      - region
+      - config_file_profile
+      - oci_cli_auth
+
+  - title: "Target cluster"
+    variables:
+      - cluster_id
+
+  - title: "WEKA"
+    variables:
+      - quay_username
+      - quay_password
+      - operator_version
+
+variables:
+  cluster_id:
+    title: OKE cluster
+    description: The cluster to install WEKA onto (oke-infra output cluster_id).
+    type: oci:container:cluster:id
+    required: true
+
+  quay_username:
+    title: quay.io robot username
+    description: From https://get.weka.io.
+    type: string
+    required: true
+
+  quay_password:
+    title: quay.io robot password
+    description: From https://get.weka.io.
+    type: password
+    required: true
+    sensitive: true
+
+  operator_version:
+    title: WEKA operator version
+    type: string
+    default: v1.14.1
+    required: true
