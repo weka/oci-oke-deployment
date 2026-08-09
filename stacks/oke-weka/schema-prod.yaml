@@ -18,10 +18,10 @@ logoUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAw
 # and immutability caveats, shown before the user runs anything.
 informationalText: >-
   Prerequisites: a get.weka.io robot account (quay.io username + password) for the
-  image pull secret. Pick a cluster capacity below — the options are labelled by WEKA
-  usable TB and the worker instance type: 31 TB is a minimal 8-node cluster; 98–588 TB
-  are 21-node VM.DenseIO.E5.Flex clusters that grow per-node NVMe; 783 TB and
-  1175 TB are 21-node bare-metal (BM.DenseIO.E4/E5.128) clusters. The choice fixes the
+  image pull secret. Pick a cluster capacity below — every option is a bare-metal
+  BM.DenseIO.E5.128 cluster (12 x 6.8 TB local NVMe per node) and the options are
+  labelled by WEKA usable capacity and node count, from 367 TB (8 nodes) up to
+  10 PB (171 nodes). The choice fixes the
   worker instance type AND node count, and BOTH are frozen after the first apply —
   changing them would destroy nodes, so deploy a new stack for a different
   capacity. NVMe capacity is scarce: if an apply
@@ -116,24 +116,28 @@ variables:
   production_tier:
     title: Cluster capacity and worker instance type
     description: >-
-      Each option fixes the worker instance type AND node count (both frozen after
-      first apply — a resize would destroy nodes; deploy a new stack for a different
-      capacity). Capacity shown is WEKA usable, after protection and filesystem
-      overhead; each NVMe drive is 6.8 TB. The 8-node option runs single protection
-      (5+2+1); every 21-node option runs double protection (16+4+1). For more than
-      1175 TB usable, deploy a separate cluster.
+      Each option fixes the node count (frozen after first apply — a resize would
+      destroy nodes; deploy a new stack for a different capacity). All options use
+      the BM.DenseIO.E5.128 bare-metal shape with 12 x 6.8 TB local NVMe per node.
+      Capacity shown is WEKA usable, after protection and filesystem overhead. The
+      8/12/16-node options run single protection (x+2+1); 21 nodes and up run double
+      protection (16+4+1). For more than 10 PB usable, deploy a separate cluster.
     type: enum
     enum:
-      - 31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
-      - 98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
-      - 196 TB usable - 21 x VM.DenseIO.E5.Flex (16 OCPU, 2 NVMe)
-      - 294 TB usable - 21 x VM.DenseIO.E5.Flex (24 OCPU, 3 NVMe)
-      - 392 TB usable - 21 x VM.DenseIO.E5.Flex (32 OCPU, 4 NVMe)
-      - 490 TB usable - 21 x VM.DenseIO.E5.Flex (40 OCPU, 5 NVMe)
-      - 588 TB usable - 21 x VM.DenseIO.E5.Flex (48 OCPU, 6 NVMe)
-      - 783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)
-      - 1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)
-    default: 31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)
+      - 367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)
+      - 661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)
+      - 955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)
+      - 1.2 PB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)
+      - 2 PB usable - 35 x BM.DenseIO.E5.128 (12 NVMe)
+      - 3 PB usable - 52 x BM.DenseIO.E5.128 (12 NVMe)
+      - 4 PB usable - 69 x BM.DenseIO.E5.128 (12 NVMe)
+      - 5 PB usable - 86 x BM.DenseIO.E5.128 (12 NVMe)
+      - 6 PB usable - 103 x BM.DenseIO.E5.128 (12 NVMe)
+      - 7 PB usable - 120 x BM.DenseIO.E5.128 (12 NVMe)
+      - 8 PB usable - 137 x BM.DenseIO.E5.128 (12 NVMe)
+      - 9 PB usable - 154 x BM.DenseIO.E5.128 (12 NVMe)
+      - 10 PB usable - 171 x BM.DenseIO.E5.128 (12 NVMe)
+    default: 367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)
     required: true
   skip_capacity_preflight:
     title: Skip NVMe capacity preflight

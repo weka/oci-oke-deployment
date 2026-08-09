@@ -4,7 +4,7 @@
 This stack ships as two zips, built from the same Terraform (they differ only in the
 bundled `schema.yaml`, generated from `schema-prod.yaml` / `schema-dev.yaml`):
 
-- **Production** — local-NVMe DenseIO, fixed capacity + instance-type options (`production_tier`):
+- **Production** — local-NVMe `BM.DenseIO.E5.128`, fixed capacity options 367 TB → 10 PB (`production_tier`):
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-prod.zip)
 - **Dev / non-production** — block-volume drives, instance count (`node_count`):
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-dev.zip)
@@ -51,18 +51,20 @@ runner ships `oci`/`kubectl`/`helm` and is pre-authenticated**, so with the defa
 1. **Resource Manager → Stacks → Create stack** from a zip of this folder (or a source-control
    config provider with working dir `stacks/oke-weka`).
 2. Fill the form (`schema.yaml`): compartment, **quay.io creds**, SSH key (paste content), and
-   sizing. In the **production** zip you pick a **capacity + worker instance type**
-   (`production_tier`) — the options are labelled by WEKA usable TB and shape, and each fixes the
-   worker shape *and* node count together:
+   sizing. In the **production** zip you pick a **capacity** (`production_tier`) — every option is
+   a `BM.DenseIO.E5.128` cluster (12 × 6.8 TB local NVMe per node), so the value simply fixes the
+   node count:
 
    | Option (the value itself) | Nodes | Protection |
    |---|---|---|
-   | `31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)` | 8 | `5+2+1` |
-   | `98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)` | 21 | `16+4+1` |
-   | `196` / `294` / `392` / `490` / `588 TB usable - 21 x VM.DenseIO.E5.Flex` (16→48 OCPU, 2→6 NVMe) | 21 | `16+4+1` |
-   | `783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)` | 21 | `16+4+1` |
-   | `1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)` | 21 | `16+4+1` |
+   | `367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)` | 8 | `5+2+1` |
+   | `661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)` | 12 | `9+2+1` |
+   | `955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)` | 16 | `13+2+1` |
+   | `1.2 PB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)` | 21 | `16+4+1` |
+   | `2` / `3` / `4` / `5` / `6` / `7` / `8` / `9` / `10 PB usable - N x BM.DenseIO.E5.128 (12 NVMe)` | 35 / 52 / 69 / 86 / 103 / 120 / 137 / 154 / 171 | `16+4+1` |
 
+   Above 21 nodes each **+17 nodes adds ~1 PB** usable, up to 10 PB at 171 nodes; for more than
+   that, deploy a separate cluster.
    Each NVMe drive is 6.8 TB; the capacity shown is WEKA usable after protection and filesystem
    overhead, and the derived scheme + capacity is printed as the `weka_sizing` output. In the **dev**
    zip you instead set an instance count (`node_count`, min 6); WEKA drives come from a per-node block
@@ -112,15 +114,17 @@ in-stack helm/kubectl providers for the WEKA layer.
   standard OKE/EKS/GKE one-click pattern and works, but it's more fragile than two stacks on
   *replacement* — if you ever recreate the cluster, prefer `terraform apply` in two phases or use
   the separate `../oke-infra` + `../weka-layer` stacks.
-- **DenseIO capacity:** the production DenseIO shapes (`VM.DenseIO.E5.Flex`, `BM.DenseIO.E4/E5.128`)
-  are frequently *out-of-host-capacity*. A `capacity.tf` preflight checks every AD before building and
-  fails early with guidance. If it still fails, choose a smaller capacity option, pin ADs via
-  `worker_placement_ads`, or try another region/AD. (This is an OCI availability constraint, not a
-  config issue.)
-- **Bare-metal options (783 TB / 1175 TB usable — `BM.DenseIO.E4/E5.128`):** the module omits
-  `shape_config` for non-Flex shapes automatically, so OCPU/memory are shape-fixed; provisioning takes
-  longer (bare-metal first boot). `driveCores` and `dataNICsNumber` are set from safe defaults —
-  revisit them for throughput tuning at the largest capacities.
+- **DenseIO capacity:** the production shape (`BM.DenseIO.E5.128`) is frequently
+  *out-of-host-capacity*. A `capacity.tf` preflight checks every AD before building and
+  fails early with guidance. Note it only reports whether the shape is available in an AD, **not
+  whether N hosts are free** — the multi-PB options need tens to hundreds of bare-metal hosts, so
+  confirm quota/capacity with Oracle before picking one. If an apply still fails, choose a smaller
+  capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
+  availability constraint, not a config issue.)
+- **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
+  are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` and
+  `dataNICsNumber` are set from safe defaults — revisit them for throughput tuning at the largest
+  capacities.
 - The WEKA CRs are **bundled** in this stack's own [`crds/`](crds); `03-wekacluster.yaml` is a
   `templatefile` rendered from the selected capacity option, so the WEKA layout matches the
   provisioned hardware.

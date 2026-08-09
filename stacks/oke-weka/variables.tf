@@ -119,10 +119,10 @@ variable "control_plane_allowed_cidrs" {
 # ---------------------------------------------------------------------------
 # Flavor — the single dial that determines drive topology and pool mode.
 #
-# production:     VM.DenseIO.E5.Flex, node-pool (managed OKE).
-#                 Local NVMe is discovered as weka.io/drives — no block volume.
-#                 OCI allows 1–48 GB/OCPU for DenseIO.E5.Flex; only NVMe count
-#                 is fixed at 1 per 8 OCPU. Default derives from flavor (8 OCPU / 96 GB).
+# production:     BM.DenseIO.E5.128, node-pool (managed OKE).
+#                 Local NVMe (12 x 6.8 TB/node) is discovered as weka.io/drives —
+#                 no block volume. OCPU/memory are fixed by the bare-metal shape;
+#                 node count comes from var.production_tier.
 #                 Use for real WEKA testing with best drive performance.
 #                 DenseIO quota is limited; check AD capacity before provisioning.
 #
@@ -175,42 +175,52 @@ variable "data_volume_gb" {
 # destroy nodes). Only used when flavor = production; non-production sizing uses
 # var.node_count directly.
 #
-#   31 TB usable    8  x VM.DenseIO.E5.Flex (8 OCPU,   1x6.8TB)  single prot. 5+2+1
-#   98 TB usable    21 x VM.DenseIO.E5.Flex (8 OCPU,   1x6.8TB)  double prot. 16+4+1
-#   196 TB usable   21 x VM.DenseIO.E5.Flex (16 OCPU,  2x6.8TB)
-#   294 TB usable   21 x VM.DenseIO.E5.Flex (24 OCPU,  3x6.8TB)
-#   392 TB usable   21 x VM.DenseIO.E5.Flex (32 OCPU,  4x6.8TB)
-#   490 TB usable   21 x VM.DenseIO.E5.Flex (40 OCPU,  5x6.8TB)
-#   588 TB usable   21 x VM.DenseIO.E5.Flex (48 OCPU,  6x6.8TB)
-#   783 TB usable   21 x BM.DenseIO.E4.128     (128 core, 8x6.8TB)
-#   1175 TB usable  21 x BM.DenseIO.E5.128     (128 core, 12x6.8TB)
+# BM.DenseIO.E5.128 (128 core, 12 x 6.8 TB = 81.6 TB raw/node) is the only
+# supported production shape, so capacity scales by node count alone:
+#
+#   367 TB usable   8   x BM.DenseIO.E5.128   single prot. 5+2+1
+#   661 TB usable   12  x BM.DenseIO.E5.128   single prot. 9+2+1
+#   955 TB usable   16  x BM.DenseIO.E5.128   single prot. 13+2+1
+#   1.2 PB usable   21  x BM.DenseIO.E5.128   double prot. 16+4+1
+#   2 PB usable     35  x BM.DenseIO.E5.128   double prot. 16+4+1
+#   3 PB usable     52  x BM.DenseIO.E5.128   (+17 nodes ~= +1 PB usable from here)
+#   4 PB usable     69  x BM.DenseIO.E5.128
+#   5 PB usable     86  x BM.DenseIO.E5.128
+#   6 PB usable     103 x BM.DenseIO.E5.128
+#   7 PB usable     120 x BM.DenseIO.E5.128
+#   8 PB usable     137 x BM.DenseIO.E5.128
+#   9 PB usable     154 x BM.DenseIO.E5.128
+#   10 PB usable    171 x BM.DenseIO.E5.128
 # ---------------------------------------------------------------------------
 variable "production_tier" {
   description = <<-EOT
-    Production cluster capacity + worker instance type (production flavor only).
-    The value fixes the worker shape AND node count; both are frozen after first
-    apply. 31 TB usable is a minimal 8-node cluster with single protection (5+2+1).
-    98–588 TB usable are 21-node VM.DenseIO.E5.Flex clusters with double
-    protection (16+4+1), growing per-node from 1 to 6 local 6.8 TB NVMe drives.
-    783 TB and 1175 TB usable are 21-node bare-metal clusters (BM.DenseIO.E4.128
-    and BM.DenseIO.E5.128). For more capacity, deploy a separate cluster.
+    Production cluster capacity (production flavor only). Every option is a
+    bare-metal BM.DenseIO.E5.128 cluster (12 x 6.8 TB local NVMe per node); the
+    value fixes the node count, which is frozen after first apply. 367/661/955 TB
+    usable are 8/12/16-node clusters with single protection (x+2+1); 1.2 PB and up
+    are 21-node-and-larger clusters with double protection (16+4+1), scaling to
+    10 PB usable at 171 nodes. For more capacity, deploy a separate cluster.
     Keep this list in sync with local.tier_specs (main.tf) and the schema enums.
   EOT
   type        = string
-  default     = "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)"
+  default     = "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)"
   validation {
     condition = contains([
-      "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)",
-      "98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)",
-      "196 TB usable - 21 x VM.DenseIO.E5.Flex (16 OCPU, 2 NVMe)",
-      "294 TB usable - 21 x VM.DenseIO.E5.Flex (24 OCPU, 3 NVMe)",
-      "392 TB usable - 21 x VM.DenseIO.E5.Flex (32 OCPU, 4 NVMe)",
-      "490 TB usable - 21 x VM.DenseIO.E5.Flex (40 OCPU, 5 NVMe)",
-      "588 TB usable - 21 x VM.DenseIO.E5.Flex (48 OCPU, 6 NVMe)",
-      "783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)",
-      "1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)",
+      "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)",
+      "661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)",
+      "955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)",
+      "1.2 PB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)",
+      "2 PB usable - 35 x BM.DenseIO.E5.128 (12 NVMe)",
+      "3 PB usable - 52 x BM.DenseIO.E5.128 (12 NVMe)",
+      "4 PB usable - 69 x BM.DenseIO.E5.128 (12 NVMe)",
+      "5 PB usable - 86 x BM.DenseIO.E5.128 (12 NVMe)",
+      "6 PB usable - 103 x BM.DenseIO.E5.128 (12 NVMe)",
+      "7 PB usable - 120 x BM.DenseIO.E5.128 (12 NVMe)",
+      "8 PB usable - 137 x BM.DenseIO.E5.128 (12 NVMe)",
+      "9 PB usable - 154 x BM.DenseIO.E5.128 (12 NVMe)",
+      "10 PB usable - 171 x BM.DenseIO.E5.128 (12 NVMe)",
     ], var.production_tier)
-    error_message = "production_tier must be one of the listed capacity/shape options, e.g. \"31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)\" — see local.tier_specs in main.tf."
+    error_message = "production_tier must be one of the listed capacity options, e.g. \"367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)\" — see local.tier_specs in main.tf."
   }
 }
 

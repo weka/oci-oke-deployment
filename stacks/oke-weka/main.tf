@@ -11,9 +11,9 @@ locals {
   # Flavor → shape / mode / drive topology
   #
   # production:
-  #   shape = VM.DenseIO.E5.Flex or BM.DenseIO.E4/E5   mode = node-pool (managed OKE)
-  #   Shape + node count come from var.production_tier, whose values name the
-  #   usable capacity and instance type directly (see tier_specs below).
+  #   shape = BM.DenseIO.E5.128   mode = node-pool (managed OKE)
+  #   Node count comes from var.production_tier, whose values name the usable
+  #   capacity and instance type directly (see tier_specs below).
   #   Local NVMe (6.8 TB/drive) is discovered as weka.io/drives by the WEKA
   #   sign-drives policy. No block volume needed or attached.
   #   Trade-off: DenseIO quota is limited; check AD capacity before provisioning
@@ -37,29 +37,35 @@ locals {
   # keys here in sync with the enum in schema-prod.yaml and the validation list in
   # variables.tf.
   #
-  # Each option pins the worker SHAPE and node COUNT together, so the deploy-time
+  # Every option pins the worker SHAPE and node COUNT together, so the deploy-time
   # choice fully determines the hardware — and the guard (guard.tf) freezes it
   # after first apply, since a resize would destroy/replace nodes.
-  #   - VM.DenseIO.E5.Flex scales one 6.8 TB NVMe drive per 8 OCPU, 12 GB
-  #     RAM/OCPU, up to 48 OCPU / 6 drives / 40.8 TB.
-  #   - BM.DenseIO.E4.128 (8 x 6.8 TB) and BM.DenseIO.E5.128 (12 x 6.8 TB) are the
-  #     bare-metal options. terraform-oci-oke omits shape_config for non-Flex shapes
-  #     automatically (regexall("Flex", ...)), so the ocpus/memory below are
-  #     informational for BM — the shape fixes them.
-  # The 31 TB option is a minimal 8-node cluster (single protection, 5+2+1); every
-  # larger one is a 21-node cluster (double protection, 16+4+1) that grows per-node
-  # capacity. The usable TB in each key is what cluster_usable_tb computes below.
+  #
+  # The ONLY supported production shape is BM.DenseIO.E5.128 (12 x 6.8 TB local
+  # NVMe = 81.6 TB raw/node, 128 cores). terraform-oci-oke omits shape_config for
+  # non-Flex shapes automatically (regexall("Flex", ...)), so the ocpus/memory
+  # below are informational — the bare-metal shape fixes them.
+  #
+  # Capacity therefore scales purely by NODE COUNT:
+  #   - 8 / 12 / 16 nodes: sub-PB entry sizes, single protection (SW = N-3, RL 2).
+  #   - 21 nodes and up:   double protection (16+4+1), where each +17 nodes adds
+  #     ~1 PB usable — hence the 21 -> 35 -> 52 -> ... -> 171 ladder up to 10 PB.
+  # The capacity in each key is what cluster_usable_tb computes below, rounded.
   # ---------------------------------------------------------------------------
   tier_specs = {
-    "31 TB usable - 8 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)"    = { shape = "VM.DenseIO.E5.Flex", ocpus = 8, memory = 96, node_count = 8, drives_per_node = 1 }
-    "98 TB usable - 21 x VM.DenseIO.E5.Flex (8 OCPU, 1 NVMe)"   = { shape = "VM.DenseIO.E5.Flex", ocpus = 8, memory = 96, node_count = 21, drives_per_node = 1 }
-    "196 TB usable - 21 x VM.DenseIO.E5.Flex (16 OCPU, 2 NVMe)" = { shape = "VM.DenseIO.E5.Flex", ocpus = 16, memory = 192, node_count = 21, drives_per_node = 2 }
-    "294 TB usable - 21 x VM.DenseIO.E5.Flex (24 OCPU, 3 NVMe)" = { shape = "VM.DenseIO.E5.Flex", ocpus = 24, memory = 288, node_count = 21, drives_per_node = 3 }
-    "392 TB usable - 21 x VM.DenseIO.E5.Flex (32 OCPU, 4 NVMe)" = { shape = "VM.DenseIO.E5.Flex", ocpus = 32, memory = 384, node_count = 21, drives_per_node = 4 }
-    "490 TB usable - 21 x VM.DenseIO.E5.Flex (40 OCPU, 5 NVMe)" = { shape = "VM.DenseIO.E5.Flex", ocpus = 40, memory = 480, node_count = 21, drives_per_node = 5 }
-    "588 TB usable - 21 x VM.DenseIO.E5.Flex (48 OCPU, 6 NVMe)" = { shape = "VM.DenseIO.E5.Flex", ocpus = 48, memory = 576, node_count = 21, drives_per_node = 6 }
-    "783 TB usable - 21 x BM.DenseIO.E4.128 (8 NVMe)"           = { shape = "BM.DenseIO.E4.128", ocpus = 128, memory = 2048, node_count = 21, drives_per_node = 8 }
-    "1175 TB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)"         = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 21, drives_per_node = 12 }
+    "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 8, drives_per_node = 12 }
+    "661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 12, drives_per_node = 12 }
+    "955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 16, drives_per_node = 12 }
+    "1.2 PB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 21, drives_per_node = 12 }
+    "2 PB usable - 35 x BM.DenseIO.E5.128 (12 NVMe)"   = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 35, drives_per_node = 12 }
+    "3 PB usable - 52 x BM.DenseIO.E5.128 (12 NVMe)"   = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 52, drives_per_node = 12 }
+    "4 PB usable - 69 x BM.DenseIO.E5.128 (12 NVMe)"   = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 69, drives_per_node = 12 }
+    "5 PB usable - 86 x BM.DenseIO.E5.128 (12 NVMe)"   = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 86, drives_per_node = 12 }
+    "6 PB usable - 103 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 103, drives_per_node = 12 }
+    "7 PB usable - 120 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 120, drives_per_node = 12 }
+    "8 PB usable - 137 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 137, drives_per_node = 12 }
+    "9 PB usable - 154 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 154, drives_per_node = 12 }
+    "10 PB usable - 171 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 171, drives_per_node = 12 }
   }
   selected_tier = local.tier_specs[var.production_tier]
 
@@ -95,7 +101,7 @@ locals {
   # WEKA usable = (N - HS) x rawPerNode x SW/(SW + RL) x 0.9, protection adapting
   # to cluster size:
   #   - N < 21  : RL = 2, HS = 1, SW = min(16, N - 3)   -> "x+2+1" (8-node: 5+2+1)
-  #   - N >= 21 : RL = 4, HS = 1, SW = 16               -> "16+4+1" (all 21-node options)
+  #   - N >= 21 : RL = 4, HS = 1, SW = 16               -> "16+4+1" (21 nodes and up)
   # ---------------------------------------------------------------------------
   weka_fs_overhead = 0.9
   weka_hot_spare   = 1

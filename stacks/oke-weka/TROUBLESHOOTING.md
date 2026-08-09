@@ -100,8 +100,10 @@ stack's own region; local runs set it in tfvars.
 
 ## 6. DenseIO out-of-host-capacity (production)
 
-Expected OCI availability constraint, not a bug — the production DenseIO shapes
-(`VM.DenseIO.E5.Flex`, `BM.DenseIO.E4/E5.128`) are scarce. The stack's `capacity.tf` preflight
+Expected OCI availability constraint, not a bug — the production DenseIO shape
+(`BM.DenseIO.E5.128`) is scarce, and the larger capacity options need tens to hundreds of free
+bare-metal hosts (the preflight only checks shape availability per AD, not host count).
+The stack's `capacity.tf` preflight
 fails fast at apply. Retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
 try another region, or use the dev (non-production) zip (Standard shapes, abundant quota).
 

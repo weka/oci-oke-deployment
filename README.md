@@ -8,7 +8,7 @@ single one-click stack or as two staged stacks.
 <!-- Works once the repo is public and a vX.Y.Z release is tagged (see .github/workflows/release.yml). -->
 The one-click stack ships in two flavors — pick one:
 
-**Production** (local-NVMe DenseIO; pick usable capacity + worker instance type, 31 TB → 1175 TB):
+**Production** (local-NVMe `BM.DenseIO.E5.128`; pick usable capacity, 367 TB → 10 PB):
 [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-prod.zip)
 
 **Dev / non-production** (block-volume drives, for trying the CSI driver / operator):
