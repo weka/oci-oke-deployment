@@ -11,25 +11,17 @@ name: Release one-click stack zips
 #   https://github.com/<owner>/<repo>/releases/latest/download/oke-weka-dev.zip
 # are what the two "Deploy to Oracle Cloud" buttons point at.
 #
-# Versioning is release-please (conventional commits). Two-step by design:
-#   1. push to main       -> release-please opens/updates a "chore: release X.Y.Z"
-#                            PR with the computed version + CHANGELOG.md. Nothing
-#                            is tagged or published yet.
-#                            Only feat/fix/perf/revert and breaking changes get
-#                            this far: a gate step skips release-please entirely
-#                            when everything since the last release is
-#                            chore/docs/test/ci/build/style/refactor. That gate
-#                            is necessary because release-please itself has no
-#                            such setting — its DefaultVersioningStrategy falls
-#                            through to a PATCH bump for every type that isn't
-#                            feat or breaking, and `hidden: true` in
-#                            changelog-sections only hides a commit from
-#                            CHANGELOG.md, it does not stop the bump.
-#   2. merge that PR      -> release-please tags vX.Y.Z and creates the Release,
-#                            then this workflow builds the zips and uploads them.
-# Escape hatches:
-#   - push a v* tag by hand -> skips release-please, builds and publishes that tag.
-#   - workflow_dispatch     -> re-runs release-please to refresh the release PR.
+# Versioning is conventional-commit driven and happens IN ONE STEP: a push to
+# main computes the next version, and if anything releasable landed, that same
+# run tags it, creates the Release, and uploads the zips. There is no release
+# PR to merge.
+#
+#   feat            -> minor        fix | perf | revert -> patch
+#   breaking (`!:` or BREAKING CHANGE) -> major
+#   everything else (chore/docs/test/ci/build/style/refactor) -> no release
+#
+# Escape hatch: push a v* tag by hand -> skips version computation, builds and
+# publishes that tag.
 on:
   push:
     branches:
@@ -39,101 +31,125 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write # tag, create releases, upload assets
-  pull-requests: write # open/update the release PR
+  contents: write # create tags, releases, upload assets
 
-# Serialize runs so two pushes can't race on the release PR or the same tag.
+# Serialize runs so two pushes can't race on the same version number.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release_please:
+  version:
     runs-on: ubuntu-latest
-    if: github.ref_type != 'tag' # a hand-pushed tag IS the release
+    if: github.ref_type != 'tag' # a hand-pushed tag IS the version
     outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
+      tag: ${{ steps.bump.outputs.tag }}
+      released: ${{ steps.bump.outputs.released }}
     steps:
+      # Third-party actions are pinned to an immutable commit SHA, not a version
+      # tag: tags are mutable, and CVE-2025-30066 (tj-actions/changed-files) was
+      # exactly that — every version tag re-pointed at credential-stealing code.
+      # The trailing comment keeps it readable and lets Dependabot bump it.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 0 # need history + tags to inspect commits since last release
+          fetch-depth: 0 # need full history + tags to find the last release
 
-      # release-please has no setting for "don't release on chore/docs/test":
-      # DefaultVersioningStrategy falls through to a PATCH bump for every type
-      # that isn't feat or breaking, and `hidden: true` in changelog-sections is
-      # render-only. So gate the action instead — if nothing since the last
-      # release is releasable, release-please never runs and no PR is opened.
-      - name: Any releasable commits since the last release?
-        id: gate
+      - name: Compute next version from conventional commits
+        id: bump
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Types that justify a release. Anything absent here (chore, docs,
-          # test, ci, build, style, refactor) does not — edit this one line to
-          # change the policy.
-          RELEASABLE: feat|fix|perf|revert
+          # Types that bump the PATCH digit. feat and breaking changes are
+          # handled separately below. Anything absent here does not release at
+          # all — edit these two lines to change the policy.
+          PATCH_TYPES: fix|perf|revert
+          MINOR_TYPES: feat
         run: |
           set -euo pipefail
 
-          last="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
-          if [ -n "$last" ] && git rev-parse -q --verify "refs/tags/${last}^{commit}" >/dev/null; then
+          # Highest existing v* tag by semver, not by date: a hotfix tagged
+          # after a later release must not be mistaken for the latest.
+          last="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          if [ -n "$last" ]; then
             range="${last}..HEAD"
-            echo "Comparing against last release ${last}"
+            base="${last#v}"
+            echo "Last release: ${last}"
           else
             range="HEAD"
-            echo "No previous release found — considering the full history"
+            base="0.0.0"
+            echo "No previous v* tag — considering the full history from 0.0.0"
           fi
 
+          # Reject a malformed tag rather than silently arithmetic-ing on it.
+          case "$base" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::last tag '${last}' is not vMAJOR.MINOR.PATCH"; exit 1 ;;
+          esac
+          major="${base%%.*}"; rest="${base#*.}"
+          minor="${rest%%.*}"; patch="${rest#*.}"
+
           # A breaking change always releases, whatever its type (chore!: etc).
-          n_type=$(git log --format='%s' "$range" \
-            | grep -cE "^(${RELEASABLE})(\([^)]*\))?!?:" || true)
-          n_breaking=$(git log --format='%B' "$range" \
+          n_break=$(git log --format='%B' "$range" \
             | grep -cE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:' || true)
+          n_minor=$(git log --format='%s' "$range" \
+            | grep -cE "^(${MINOR_TYPES})(\([^)]*\))?!?:" || true)
+          n_patch=$(git log --format='%s' "$range" \
+            | grep -cE "^(${PATCH_TYPES})(\([^)]*\))?!?:" || true)
+
+          # Pre-1.0 note: a breaking change goes to 1.0.0, matching the previous
+          # release-please config (bump-minor-pre-major: false). If you'd rather
+          # 0.x breaking changes bump the minor, guard this branch on $major.
+          if   [ "$n_break" -gt 0 ]; then major=$((major+1)); minor=0; patch=0; why="breaking"
+          elif [ "$n_minor" -gt 0 ]; then minor=$((minor+1)); patch=0;          why="feat"
+          elif [ "$n_patch" -gt 0 ]; then patch=$((patch+1));                   why="fix/perf/revert"
+          else why=""
+          fi
 
           {
             echo "### Release gate"
             echo ""
-            echo "Range: \`${range}\` — releasable: ${n_type}, breaking: ${n_breaking}"
+            echo "Range: \`${range}\` — breaking: ${n_break}, minor: ${n_minor}, patch: ${n_patch}"
             echo ""
             echo '```'
             git log --format='%s' "$range" | head -50
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$n_type" -gt 0 ] || [ "$n_breaking" -gt 0 ]; then
-            echo "releasable=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "releasable=false" >> "$GITHUB_OUTPUT"
-            echo "Only non-releasable commits (chore/docs/test/...) — skipping release-please."
+          if [ -z "$why" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "Only non-releasable commits (chore/docs/test/...) — nothing to release."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No release: nothing releasable since \`${last:-the start of history}\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
-      # Third-party actions are pinned to an immutable commit SHA, not a version
-      # tag: tags are mutable, and CVE-2025-30066 (tj-actions/changed-files) was
-      # exactly that — every version tag re-pointed at credential-stealing code.
-      # The trailing comment keeps it readable and lets Dependabot bump it.
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        id: rp
-        if: steps.gate.outputs.releasable == 'true'
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          tag="v${major}.${minor}.${patch}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::${tag} already exists — refusing to overwrite"; exit 1
+          fi
+
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Next version: ${tag} (${why})"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Releasing **${tag}** (${why} bump from ${base})." >> "$GITHUB_STEP_SUMMARY"
 
   build-and-release:
-    needs: release_please
-    # Runs when release-please just cut a release, or when a v* tag was pushed by
-    # hand (in which case the release-please job is skipped, hence !cancelled()).
+    needs: version
+    # Runs when the version job computed a new version, or when a v* tag was
+    # pushed by hand (in which case the version job is skipped, hence
+    # !cancelled()).
     if: >-
       !cancelled() &&
       (github.ref_type == 'tag' ||
-       needs.release_please.outputs.release_created == 'true')
+       needs.version.outputs.released == 'true')
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.ref_type == 'tag' && github.ref_name || needs.release_please.outputs.tag_name }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.ref_type == 'tag' && github.ref_name || needs.release_please.outputs.tag_name }}
+          # On the main path the tag does not exist yet — `gh release create`
+          # below creates it, pointed at exactly this commit.
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
       # Both zips are built in one job so a single upload publishes them
       # together — two parallel jobs would race on the same release.
@@ -169,18 +185,25 @@ jobs:
             git checkout -- variables.tf
           done
 
+      # The release is created only after the zips build, so a failed build
+      # never leaves a published-but-empty release behind. `--target` makes
+      # `gh` create the tag itself, at this exact commit.
+      #
       # gh is preinstalled on the runner, so no third-party action gets a token
-      # here. Upload-only on the release-please path, so release-please's
-      # CHANGELOG-derived release notes are never overwritten; --generate-notes
-      # is only used for a hand-pushed tag, where no release exists yet.
-      - name: Upload zips to release
+      # here. Note that a tag created with GITHUB_TOKEN does not re-trigger this
+      # workflow's `tags: v*` filter — that is deliberate, the build below is
+      # already part of this same run.
+      - name: Create release and upload zips
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$TAG" || { echo "::error::no tag to release"; exit 1; }
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" --generate-notes
+            || gh release create "$TAG" \
+                 --target "$GITHUB_SHA" \
+                 --title "$TAG" \
+                 --generate-notes
           gh release upload "$TAG" oke-weka-prod.zip oke-weka-dev.zip --clobber
           gh release view "$TAG" --json tagName,assets \
             --jq '{tag: .tagName, assets: [.assets[].name]}'
