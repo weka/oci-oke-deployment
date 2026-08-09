@@ -6,11 +6,10 @@
 # nodes to schedule on. gavinbunney/kubectl resolves the CR kinds at apply time, so
 # the CRs tolerate the CRDs having just been installed by the Helm chart.
 #
-# NOTE: the CR manifests are BUNDLED in this stack's own crds/ dir (not the repo
-# root) so the stack is self-contained — a standalone zip (ORM upload / publish /
-# Deploy-to-Oracle-Cloud) includes them. This copy of 03-wekacluster.yaml is a
-# templatefile (sizing placeholders filled from the tier); the repo-root crds/
-# stay static for the manual/staged path, so the two intentionally diverge now.
+# NOTE: the CR manifests live in crds/ alongside this config so the stack is
+# self-contained — a standalone zip (ORM upload / publish / Deploy-to-Oracle-Cloud)
+# includes them. 03-wekacluster.yaml is a templatefile whose sizing placeholders are
+# filled from the selected tier, so the WEKA layout matches the provisioned hardware.
 
 locals {
   operator_namespace     = "weka-operator-system"

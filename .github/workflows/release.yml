@@ -1,6 +1,6 @@
 name: Release one-click stack zips
 
-# Build TWO self-contained zips from the all-in-one stack (stacks/oke-weka) and
+# Build TWO self-contained zips from the all-in-one stack (the repo root) and
 # attach them to a GitHub Release:
 #   - oke-weka-prod.zip  (production, local-NVMe DenseIO tiers)  <- schema-prod.yaml
 #   - oke-weka-dev.zip   (non-production, block-volume drives)   <- schema-dev.yaml
@@ -156,7 +156,11 @@ jobs:
       - name: Build stack zips
         run: |
           set -euo pipefail
-          cd stacks/oke-weka
+
+          # The stack IS the repo root, so the zips are built OUTSIDE the tree:
+          # zipping "." into the workspace would sweep the prod zip into the dev one
+          # on the second pass (and race zip writing into its own source dir).
+          out="${RUNNER_TEMP}"
 
           for variant in prod dev; do
             # Select the variant's schema as the required schema.yaml at the zip root.
@@ -174,12 +178,14 @@ jobs:
                 || { echo "::error::failed to pin flavor=non-production in variables.tf"; exit 1; }
             fi
 
-            # Zip the stack CONTENTS (schema.yaml + crds/ bundled). Exclude the raw
-            # schema variants and local-only artifacts.
-            zip -qr "${GITHUB_WORKSPACE}/oke-weka-${variant}.zip" . \
-              -x 'schema-prod.yaml' 'schema-dev.yaml' \
+            # Zip the stack CONTENTS (schema.yaml + crds/ bundled). Exclude repo
+            # scaffolding, the raw schema variants, and local-only artifacts.
+            # LICENSE/NOTICE stay in: Apache-2.0 requires them alongside the code.
+            zip -qr "${out}/oke-weka-${variant}.zip" . \
+              -x '.git/*' '.github/*' \
+                 'schema-prod.yaml' 'schema-dev.yaml' \
                  '.terraform/*' '*.tfstate*' 'terraform.tfvars' '*.auto.tfvars' 'orm-vars.json'
-            unzip -l "${GITHUB_WORKSPACE}/oke-weka-${variant}.zip"
+            unzip -l "${out}/oke-weka-${variant}.zip"
 
             # Undo the in-place edits before building the next variant.
             git checkout -- variables.tf
@@ -204,6 +210,7 @@ jobs:
                  --target "$GITHUB_SHA" \
                  --title "$TAG" \
                  --generate-notes
-          gh release upload "$TAG" oke-weka-prod.zip oke-weka-dev.zip --clobber
+          gh release upload "$TAG" \
+            "${RUNNER_TEMP}/oke-weka-prod.zip" "${RUNNER_TEMP}/oke-weka-dev.zip" --clobber
           gh release view "$TAG" --json tagName,assets \
             --jq '{tag: .tagName, assets: [.assets[].name]}'

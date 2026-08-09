@@ -1,60 +1,83 @@
 # oci-oke-deployment — WEKA on OKE
 
-Terraform to stand up a managed **OKE** cluster on OCI and layer **WEKA** (operator +
-custom resources) on top, delivered as **OCI Resource Manager (ORM)** stacks so the
-whole path — *OKE creation → operator setup* — is Infrastructure-as-Code, either as a
-single one-click stack or as two staged stacks.
+Terraform that stands up a managed **OKE** cluster on OCI and layers **WEKA** (operator +
+custom resources) on top in a **single apply**, delivered as an **OCI Resource Manager (ORM)**
+stack so the whole path — *OKE creation → operator setup* — is Infrastructure-as-Code.
 
 <!-- Works once the repo is public and a vX.Y.Z release is tagged (see .github/workflows/release.yml). -->
-The one-click stack ships in two flavors — pick one:
+The stack ships as two zips built from the same Terraform (they differ only in the bundled
+`schema.yaml`, generated from `schema-prod.yaml` / `schema-dev.yaml`) — pick one:
 
-**Production** (local-NVMe `BM.DenseIO.E5.128`; pick usable capacity, 367 TB → 10 PB):
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-prod.zip)
+- **Production** — local-NVMe `BM.DenseIO.E5.128`, fixed capacity options 367 TB → 10 PB (`production_tier`):
+  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-prod.zip)
+- **Dev / non-production** — block-volume drives, instance count (`node_count`):
+  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-dev.zip)
 
-**Dev / non-production** (block-volume drives, for trying the CSI driver / operator):
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-dev.zip)
+Licensed under **Apache-2.0** (see [LICENSE](LICENSE)). Security notes and the accepted IaC
+posture are in [SECURITY.md](SECURITY.md).
 
-Licensed under **Apache-2.0** (see [LICENSE](LICENSE)). Security notes and the
-accepted IaC posture are in [SECURITY.md](SECURITY.md).
+One apply does the whole thing:
+
+1. OKE cluster + converged node pool (hugepages, local NVMe, WEKA node prep)
+2. the intra-VCN data-plane security-list fix (`weka_data_network.tf`)
+3. the WEKA operator (Helm), quay.io image pull secrets, and the
+   WekaPolicy / WekaCluster / WekaClient custom resources (`weka.tf`)
+
+Sizing, networking, and the API-endpoint visibility are **frozen after the first apply**
+(a change would destroy/replace instances); only the quay.io creds and operator version
+stay editable. See [`guard.tf`](guard.tf).
 
 ## Layout
 
-```
-stacks/
-  oke-weka/     # ONE-CLICK: cluster + WEKA operator + CRs in a single apply
-  oke-infra/    # Stack 1 (staged): OKE cluster + WEKA node prep + intra-VCN data-plane fix
-  weka-layer/   # Stack 2 (staged): WEKA operator + image pull secrets + WekaPolicy/Cluster/Client
-crds/           # WEKA custom resource manifests (consumed by weka-layer and oke-weka)
-scripts/        # install-weka-operator.sh — the pre-Terraform manual path (fallback)
-```
+The repo **is** the stack — every `.tf` at the root is part of one Terraform configuration:
 
-Two ways to deploy — pick one:
+| File | Purpose |
+|---|---|
+| `providers.tf` | Terraform + `oci` (default + `oci.home`), `helm`, `kubernetes`, `kubectl` providers |
+| `variables.tf` | All inputs (required: `tenancy_id`, `compartment_id`, quay.io creds) |
+| `main.tf` | The `terraform-oci-oke` module block (VCN, cluster, node pool + WEKA node prep) |
+| `capacity.tf` | Preflight that checks DenseIO shape availability per AD before building |
+| `weka_data_network.tf` | Intra-VCN data-plane security list + attach to the worker subnet |
+| `weka.tf` | Operator namespace, pull secrets, `helm_release`, and the WEKA custom resources |
+| `guard.tf` | Lifecycle guards that freeze sizing/network inputs after the first apply |
+| `outputs.tf` | `cluster_id`, `region`, `weka_sizing`, a ready-to-run `create_kubeconfig` command |
+| `schema-prod.yaml` / `schema-dev.yaml` | ORM Console variable forms; one becomes `schema.yaml` per zip |
+| `crds/` | WEKA custom resource manifests (`03-wekacluster.yaml` is a rendered `templatefile`) |
 
-- **One-click:** [`stacks/oke-weka/`](stacks/oke-weka) — a single ORM stack that provisions the
-  cluster **and** installs WEKA in one apply. Best for "click Apply, get a running WEKA-on-OKE".
-- **Staged (two stacks):** [`stacks/oke-infra/`](stacks/oke-infra) then
-  [`stacks/weka-layer/`](stacks/weka-layer) (feed stack 1's `cluster_id` / `region` into stack 2).
-  Best when you want infra and the WEKA layer managed/rerun independently.
+## How the single apply works
 
-Each stack has its own `README.md`, `variables.tf`, and `schema.yaml`.
+- The `oci` (+ `oci.home`) providers build the cluster via the `terraform-oci-oke` module.
+- The `kubernetes`/`helm`/`kubectl` providers connect to the cluster **created in this same apply**:
+  their endpoint/CA come from `module.oke` outputs (`cluster_endpoints` / `cluster_ca_cert`, with
+  `output_detail = true`) **frozen into a `terraform_data` resource** so the values are state-backed
+  and still resolve during `destroy` (a kube-config *data source* cannot — see
+  [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §3). The API token is minted by the
+  `oci ce cluster generate-token` exec plugin.
+- Workers are bootstrapped by the **module's own cloud-init** (`disable_default_cloud_init = false`) —
+  required so self-managed instance-pool (non-production) nodes join; WEKA node tuning is layered as a
+  supplementary `cloud_init` part (see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §1).
+- A `null_resource.wait_for_kube_api` gate makes the WEKA layer wait until the API endpoint is
+  actually reachable, and the WEKA resources `depends_on = [module.oke]`, so the operator install
+  waits until the cluster, workers, and the network fix are all done.
+
+> **Hit a failure?** See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — the common ones (0 nodes, Helm
+> `context deadline exceeded`, `destroy` stuck) all have documented root causes and fixes.
 
 ## Running in Resource Manager (and the one dependency)
 
 [OCI Resource Manager](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/resource-manager-and-terraform.htm)
 runs Terraform as a managed service: it stores + locks state, versions your config, injects
-resource-principal credentials, and renders a Console variable form from each stack's `schema.yaml`.
+resource-principal credentials, and renders a Console variable form from `schema.yaml`.
 
 **kubectl and helm are not binaries here — they are the Terraform providers** (`hashicorp/helm`,
 `hashicorp/kubernetes`, `gavinbunney/kubectl`), which `terraform init` downloads into whatever runs
-the apply. The **only** external tool either stack needs is the **`oci` CLI**, for one call each:
+the apply. The **only** external tool the stack needs is the **`oci` CLI**, for two calls: the
+worker-subnet security-list attach, and minting the OKE API token (there is no provider-native OKE
+token — `oci_containerengine_cluster_token` does not exist in the provider, so that call is
+unavoidable).
 
-- `oke-infra` attaches the WEKA data-plane security list (`oci network subnet update`).
-- `weka-layer` mints the OKE API token the k8s providers use (`oci ce cluster generate-token`).
-  There is no provider-native OKE token (`oci_containerengine_cluster_token` does not exist in the
-  provider), so this one `oci` call is unavoidable.
-
-Both stacks pick the right `oci` auth automatically via the **`oci_cli_auth`** variable
-(default `""` — no `--auth` flag; the environment is already authenticated):
+Auth is picked automatically via the **`oci_cli_auth`** variable (default `""` — no `--auth` flag;
+the environment is already authenticated):
 
 | Where you apply | Set | `oci` CLI auth |
 |---|---|---|
@@ -65,70 +88,79 @@ Both stacks pick the right `oci` auth automatically via the **`oci_cli_auth`** v
 
 **Verified against a live ORM runner (us-phoenix-1):** the managed runner ships `oci`, `kubectl`,
 and `helm`, and is pre-authenticated with a delegation token — so `oci` with **no `--auth` flag**
-works (note: `--auth resource_principal` does **not** — no RP env there). A stack-1 **Plan job**
-succeeded (`64 to add`) with resource-principal creds auto-injected into the provider. So both stacks
-run **directly in the ORM Console**; Cloud Shell works identically. In the ORM runner, provide the
-SSH key as **content** (`ssh_public_key`) — there are no local files on the runner.
+works (note: `--auth resource_principal` does **not** — no RP env there). In the ORM runner, provide
+the SSH key as **content** (`ssh_public_key`) — there are no local files on the runner.
 
-## Quick start
+## One-click in Resource Manager
+
+1. **Resource Manager → Stacks → Create stack** from one of the release zips above (or a
+   source-control config provider pointed at this repo — the working directory is the repo root).
+2. Fill the form (`schema.yaml`): compartment, **quay.io creds**, SSH key (paste content), and
+   sizing. In the **production** zip you pick a **capacity** (`production_tier`) — every option is
+   a `BM.DenseIO.E5.128` cluster (12 × 6.8 TB local NVMe per node), so the value simply fixes the
+   node count:
+
+   | Option (the value itself) | Nodes | Protection |
+   |---|---|---|
+   | `367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)` | 8 | `5+2+1` |
+   | `661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)` | 12 | `9+2+1` |
+   | `955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)` | 16 | `13+2+1` |
+   | `1.2 PB usable - 21 x BM.DenseIO.E5.128 (12 NVMe)` | 21 | `16+4+1` |
+   | `2` / `3` / `4` / `5` / `6` / `7` / `8` / `9` / `10 PB usable - N x BM.DenseIO.E5.128 (12 NVMe)` | 35 / 52 / 69 / 86 / 103 / 120 / 137 / 154 / 171 | `16+4+1` |
+
+   Above 21 nodes each **+17 nodes adds ~1 PB** usable, up to 10 PB at 171 nodes; for more than
+   that, deploy a separate cluster.
+   Each NVMe drive is 6.8 TB; the capacity shown is WEKA usable after protection and filesystem
+   overhead, and the derived scheme + capacity is printed as the `weka_sizing` output. In the **dev**
+   zip you instead set an instance count (`node_count`, min 6); WEKA drives come from a per-node block
+   volume. The capacity choice / count is **frozen after the first apply** — deploy a new stack for a
+   different capacity.
+3. **Plan**, then **Apply**. When it finishes, the cluster is up *and* WEKA is installed.
+
+## Local / Cloud Shell
 
 ```bash
-# Stack 1 — cluster
-cd stacks/oke-infra
-cp terraform.tfvars.example terraform.tfvars    # tenancy_id + compartment_id (+ profile for local)
-terraform init && terraform apply
+cp terraform.tfvars.example terraform.tfvars   # tenancy_id, compartment_id, quay creds (+ profile for local)
+terraform init && terraform apply              # ~15–20 min: cluster + WEKA
 terraform output -raw create_kubeconfig_command | bash
-kubectl get nodes                                # wait for Ready
-
-# Stack 2 — WEKA (run from Cloud Shell or a host with the oci CLI)
-cd ../weka-layer
-cp terraform.tfvars.example terraform.tfvars     # cluster_id + region from stack 1, quay creds
-terraform init && terraform apply
-kubectl get pods -n weka-operator-system
-kubectl get wekacluster dev -n default
+export KUBECONFIG=~/weka-cluster.yaml
+kubectl get pods -n weka-operator-system       # operator Running
+kubectl get wekacluster dev -n default -w      # forms → healthy
 ```
 
-Teardown is `terraform destroy` in each stack (weka-layer first, then oke-infra).
+Teardown is `terraform destroy` (or an ORM **Destroy** job). OKE clusters do **not** auto-expire and
+DenseIO nodes burn quota — destroy explicitly when done.
 
 ## Testing in Resource Manager via the CLI
 
-You can drive the whole ORM lifecycle from the `oci` CLI (no Console clicks). This is how the stacks
-were validated. Replace `<C>`/`<T>` with your compartment/tenancy OCIDs, `<PUBKEY>` with your SSH
-public key **content**, and use a working `--profile`.
+You can drive the whole ORM lifecycle from the `oci` CLI (no Console clicks). Replace `<C>`/`<T>`
+with your compartment/tenancy OCIDs, `<PUBKEY>` with your SSH public key **content**, and use a
+working `--profile`.
 
 ```bash
-# --- Stack 1: oke-infra ---
-cd stacks/oke-infra
-zip -q /tmp/s1.zip main.tf variables.tf providers.tf outputs.tf weka_data_network.tf schema.yaml .terraform.lock.hcl
-printf '{"tenancy_id":"<T>","compartment_id":"<C>","region":"us-phoenix-1","ssh_public_key":"<PUBKEY>"}' > /tmp/v1.json
-S1=$(oci resource-manager stack create --compartment-id <C> --config-source /tmp/s1.zip \
-      --terraform-version 1.5.x --variables file:///tmp/v1.json --display-name weka-oke-infra \
+# Build a stack zip the same way the release workflow does: the repo root, minus
+# scaffolding, the raw schema variants, and local-only artifacts.
+cp schema-prod.yaml schema.yaml                  # or schema-dev.yaml
+zip -qr /tmp/stack.zip . \
+  -x '.git/*' '.github/*' 'schema-prod.yaml' 'schema-dev.yaml' \
+     '.terraform/*' '*.tfstate*' 'terraform.tfvars' '*.auto.tfvars' 'orm-vars.json'
+
+printf '{"tenancy_id":"<T>","compartment_id":"<C>","region":"us-phoenix-1","ssh_public_key":"<PUBKEY>","quay_username":"%s","quay_password":"%s"}' \
+      "$QUAY_USERNAME" "$QUAY_PASSWORD" > /tmp/vars.json
+
+S=$(oci resource-manager stack create --compartment-id <C> --config-source /tmp/stack.zip \
+      --terraform-version 1.5.x --variables file:///tmp/vars.json --display-name weka-oke \
       --region us-phoenix-1 --query 'data.id' --raw-output)
-J1=$(oci resource-manager job create-apply-job --stack-id $S1 --execution-plan-strategy AUTO_APPROVED \
+J=$(oci resource-manager job create-apply-job --stack-id $S --execution-plan-strategy AUTO_APPROVED \
       --region us-phoenix-1 --query 'data.id' --raw-output)
 # poll until SUCCEEDED:
-oci resource-manager job get --job-id $J1 --query 'data."lifecycle-state"' --raw-output
-# logs if needed: oci resource-manager job get-job-logs-content --job-id $J1 --raw-output
-CLUSTER=$(oci ce cluster list --compartment-id <C> --name weka-oke --region us-phoenix-1 \
-      --query 'data[0].id' --raw-output)
+oci resource-manager job get --job-id $J --query 'data."lifecycle-state"' --raw-output
+# logs if needed: oci resource-manager job get-job-logs-content --job-id $J --raw-output
 
-# --- Stack 2: weka-layer ---
-cd ../weka-layer
-zip -q /tmp/s2.zip main.tf variables.tf providers.tf outputs.tf schema.yaml .terraform.lock.hcl
-printf '{"cluster_id":"%s","region":"us-phoenix-1","quay_username":"%s","quay_password":"%s"}' \
-      "$CLUSTER" "$QUAY_USERNAME" "$QUAY_PASSWORD" > /tmp/v2.json
-S2=$(oci resource-manager stack create --compartment-id <C> --config-source /tmp/s2.zip \
-      --terraform-version 1.5.x --variables file:///tmp/v2.json --display-name weka-layer \
-      --region us-phoenix-1 --query 'data.id' --raw-output)
-oci resource-manager job create-apply-job --stack-id $S2 --execution-plan-strategy AUTO_APPROVED \
-      --region us-phoenix-1 --query 'data.id' --raw-output   # poll as above
-
-# --- Teardown (weka-layer first, then oke-infra) ---
-for S in $S2 $S1; do
-  oci resource-manager job create-destroy-job --stack-id $S --execution-plan-strategy AUTO_APPROVED \
-    --region us-phoenix-1 --query 'data.id' --raw-output    # poll to SUCCEEDED
-  oci resource-manager stack delete --stack-id $S --force --region us-phoenix-1
-done
+# --- Teardown ---
+oci resource-manager job create-destroy-job --stack-id $S --execution-plan-strategy AUTO_APPROVED \
+  --region us-phoenix-1 --query 'data.id' --raw-output    # poll to SUCCEEDED
+oci resource-manager stack delete --stack-id $S --force --region us-phoenix-1
 ```
 
 Notes:
@@ -136,16 +168,35 @@ Notes:
   and leave `config_file_profile`/`oci_cli_auth` unset so the runner authenticates itself.
 - `--terraform-version 1.5.x` is what the runner accepts; a Plan job (`create-plan-job`) is a free
   dry run that validates the config + `schema.yaml` before you apply.
-- **Capacity:** the worker pool uses `VM.DenseIO.E5.Flex`, which is frequently
-  *out-of-host-capacity*. If the node pool fails to launch, retry, lower `node_count` (add it to the
-  variables JSON), pick another AD, or try another region (e.g. `us-ashburn-1`). This is an OCI
-  availability constraint, not a config issue.
 
-## Verified status
+## Security posture (accepted)
 
-- ✅ Bare-ORM mechanism: stack-1 **Plan** succeeds (`64 to add`), resource-principal auth injected;
-  the ORM runner ships `oci`/`kubectl`/`helm` and authenticates with **no `--auth` flag**; OKE
-  control plane creates and destroys cleanly through ORM.
-- ⏳ Full worker pool + WEKA layer: not yet completed end-to-end — blocked by DenseIO
-  out-of-host-capacity in us-phoenix-1 at test time (not a code issue). Re-run the steps above when
-  capacity is available.
+The OKE API endpoint is **public and reachable from `0.0.0.0/0`** — not for laptop `kubectl`, but
+because this stack installs WEKA over the Kubernetes API **from the ORM / Marketplace runner, which
+is outside your VCN**, so the endpoint must be reachable for the install to succeed. The endpoint is
+still **token-authenticated** (short-lived OCI/OKE tokens). This is an accepted, documented default
+(see [`SECURITY.md`](SECURITY.md)).
+
+**Hardening (optional, not implemented here):** for a fully private control plane, install WEKA from
+**inside the VCN** — enable the module's operator host (`create_operator = true`) and run the Helm
+install + `kubectl apply` from it via cloud-init, then set `control_plane_is_public = false`. That
+removes the public endpoint entirely at the cost of an always-on operator VM and dropping the
+in-stack helm/kubectl providers for the WEKA layer.
+
+## Caveats
+
+- **Same-apply provider auth** (k8s providers targeting a cluster built in the same run) is the
+  standard OKE/EKS/GKE one-click pattern and works, but it's more fragile on *replacement* — if you
+  ever recreate the cluster, prefer a two-phase `terraform apply` (`-target=module.oke` first, then
+  a full apply) over recreating everything in one shot.
+- **DenseIO capacity:** the production shape (`BM.DenseIO.E5.128`) is frequently
+  *out-of-host-capacity*. A `capacity.tf` preflight checks every AD before building and
+  fails early with guidance. Note it only reports whether the shape is available in an AD, **not
+  whether N hosts are free** — the multi-PB options need tens to hundreds of bare-metal hosts, so
+  confirm quota/capacity with Oracle before picking one. If an apply still fails, choose a smaller
+  capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
+  availability constraint, not a config issue.)
+- **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
+  are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` and
+  `dataNICsNumber` are set from safe defaults — revisit them for throughput tuning at the largest
+  capacities.

@@ -14,7 +14,7 @@ output "console_url" {
 }
 
 output "region" {
-  description = "Region the cluster lives in (for create-kubeconfig, and as input to the weka-layer stack)."
+  description = "Region the cluster lives in (used by the create-kubeconfig command)."
   value       = var.region
 }
 
