@@ -312,6 +312,8 @@ variable "node_hugepages" {
     pages per OCPU for production (8000 ~= 15.6 GB at 8 OCPU, scaling up so larger
     tiers keep headroom) and 8000 for non-production. The operator sizes each WEKA
     container's hugepages itself; the node only needs enough total reserved.
+    Written to /etc/sysctl.d/99-weka-hugepages.conf on each worker, so the
+    reservation survives a reboot.
   EOT
   type        = number
   default     = null

@@ -14,3 +14,7 @@ crash.log
 /schema.yaml
 
 .terraform.lock.hcl
+
+.idea/
+.vscode/
+.DS_Store

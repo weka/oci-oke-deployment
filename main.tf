@@ -136,7 +136,12 @@ locals {
   # timeout). Deferring to the module's bootstrap fixes the instance-pool path.
   #
   # This part carries ONLY the WEKA tuning, as cloud-config:
-  #   - hugepages via runcmd (runtime-independent)
+  #   - hugepages: a /etc/sysctl.d drop-in (survives reboot — `sysctl -w` alone
+  #     does not, so a rebooted node would come back with the image default and
+  #     WEKA containers would fail to get their hugepages) plus an immediate
+  #     `sysctl --system` so the reservation is live on this boot too. Reserving
+  #     early matters: hugepages need contiguous memory, and a long-running node
+  #     may not be able to satisfy the request later.
   #   - a systemd ONESHOT unit for the static CPU-manager policy. It MUST be a
   #     systemd unit, not an inline/backgrounded script: the module prepends custom
   #     cloud_init parts BEFORE its bootstrap, so kubelet isn't configured yet when
@@ -146,6 +151,9 @@ locals {
   #     cpuManagerPolicy=static, locating the config dynamically (path varies by
   #     image generation; OL8/CRI-O uses /etc/kubernetes/kubelet-config.json) and
   #     auto-reverting if kubelet won't restart, so it can never strand a node.
+  #     Either way it ends in exactly one kubelet restart — including when the
+  #     policy is already set — because kubelet only reads hugepage capacity at
+  #     startup and may have come up before the sysctl drop-in was applied.
   #
   #     CRITICAL: start it with `systemctl start --no-block`, NEVER `enable --now`.
   #     Our runcmd runs in cloud-init's scripts-user (final) stage. `enable --now`
@@ -158,6 +166,15 @@ locals {
   #     exceeded`). `start --no-block` enqueues the start and returns immediately;
   #     systemd then runs the oneshot in the background, still ordered After=kubelet.
   # ---------------------------------------------------------------------------
+  # Reboot-persistent hugepage reservation. systemd-sysctl.service re-applies
+  # /etc/sysctl.d/* on every boot, so the node comes back with the reservation
+  # intact; the 99- prefix sorts it last, after the image's own drop-ins.
+  weka_hugepages_sysctl = <<-CONF
+    # Managed by the WEKA OKE stack — do not edit.
+    # 2Mi hugepages reserved for WEKA containers (see local.node_hugepages).
+    vm.nr_hugepages = ${local.node_hugepages}
+  CONF
+
   weka_cpu_tuning_script = <<-SCRIPT
     #!/bin/bash
     for i in $(seq 1 90); do
@@ -166,7 +183,27 @@ locals {
         [ -f "$p" ] && { cfg="$p"; break; }
       done
       if [ -n "$cfg" ] && systemctl is-active --quiet kubelet; then
-        grep -q '"cpuManagerPolicy"' "$cfg" 2>/dev/null && { logger -t weka-tuning "cpuManagerPolicy already set in $cfg"; exit 0; }
+        # Matches both the JSON ("cpuManagerPolicy":) and YAML (cpuManagerPolicy:)
+        # forms, so the already-configured path is reachable for either image.
+        if grep -qE '^[[:space:]]*"?cpuManagerPolicy"?[[:space:]]*:' "$cfg" 2>/dev/null; then
+          # Config is already correct, so there is nothing to edit — but kubelet
+          # still needs ONE restart. It reads hugepage capacity at startup, and
+          # /etc/sysctl.d is applied on a boot path that can land after kubelet is
+          # already up; a kubelet that started first advertises hugepages-2Mi=0 and
+          # WEKA pods sit Pending forever on a request the node claims it cannot
+          # meet. Restarting re-reads /sys and republishes the real capacity.
+          logger -t weka-tuning "cpuManagerPolicy already set in $cfg; restarting kubelet once for hugepages ($(cat /proc/sys/vm/nr_hugepages) reserved)"
+          systemctl restart kubelet; sleep 15
+          if systemctl is-active --quiet kubelet; then
+            logger -t weka-tuning "kubelet restarted for hugepage capacity"
+          else
+            # No config was touched, so there is nothing to revert — one more
+            # restart is the only recovery, and leaving it down is worse.
+            logger -t weka-tuning "WARNING: kubelet did not come back after hugepage restart; retrying once"
+            systemctl restart kubelet
+          fi
+          exit 0
+        fi
         cp -a "$cfg" "$cfg.wekabak"
         case "$cfg" in
           *.json) tmp=$(mktemp); jq '.systemReserved.cpu="1" | .cpuManagerPolicy="static"' "$cfg" > "$tmp" && mv "$tmp" "$cfg" ;;
@@ -189,8 +226,8 @@ locals {
 
   weka_cpu_tuning_unit = <<-UNIT
     [Unit]
-    Description=WEKA static CPU-manager policy for kubelet
-    After=kubelet.service
+    Description=WEKA kubelet tuning (static CPU-manager policy + hugepage capacity)
+    After=kubelet.service systemd-sysctl.service
     Wants=kubelet.service
     [Service]
     Type=oneshot
@@ -205,9 +242,11 @@ locals {
     write_files = [
       { path = "/usr/local/sbin/weka-cpu-tuning.sh", permissions = "0755", owner = "root:root", content = local.weka_cpu_tuning_script },
       { path = "/etc/systemd/system/weka-cpu-tuning.service", permissions = "0644", owner = "root:root", content = local.weka_cpu_tuning_unit },
+      { path = "/etc/sysctl.d/99-weka-hugepages.conf", permissions = "0644", owner = "root:root", content = local.weka_hugepages_sysctl },
     ]
     runcmd = [
-      "sysctl -w vm.nr_hugepages=${local.node_hugepages}",
+      # Apply the drop-in now (it is what systemd-sysctl re-applies on every boot).
+      "sysctl --system",
       "grep -q hugetlbfs /proc/mounts || { mkdir -p /mnt/huge && mount -t hugetlbfs none /mnt/huge; }",
       "systemctl daemon-reload",
       # enable for persistence, then start ASYNC. NEVER `enable --now` here: a
