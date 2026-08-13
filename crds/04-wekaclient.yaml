@@ -11,3 +11,15 @@ spec:
   targetCluster:
     name: dev
     namespace: default
+%{ if eth_device != "" ~}
+  # MUST match the WekaCluster's network block (03-wekacluster.yaml). Without it
+  # the client defaults to the virtual-function path and requests the extended
+  # resource weka.io/weka-nics, which NOTHING advertises when the data plane binds
+  # the physical interface (no device plugin is deployed). The pods then sit
+  # Pending forever on "Insufficient weka.io/weka-nics" while the cluster itself
+  # is perfectly Ready — the containers that bind ethDevice request zero NICs.
+  network:
+    udpMode: ${udp_mode}
+    ethDevice: ${eth_device}
+    allocateVfPerIoNode: ${allocate_vf_per_io_node}
+%{ endif ~}

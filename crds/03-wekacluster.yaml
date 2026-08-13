@@ -22,3 +22,12 @@ spec:
   redundancyLevel: ${redundancy_level}
   stripeWidth: ${stripe_width}
   template: dynamic
+%{ if eth_device != "" ~}
+  # Bare metal: DPDK binds the node's PHYSICAL interface directly, so ensure-nics
+  # (secondary VNICs via the OCI Core API) is disabled — see weka.tf. ethDevice is
+  # shape-specific; verify with `ip -br link show` on a worker.
+  network:
+    udpMode: ${udp_mode}
+    ethDevice: ${eth_device}
+    allocateVfPerIoNode: ${allocate_vf_per_io_node}
+%{ endif ~}

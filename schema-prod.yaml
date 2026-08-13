@@ -65,6 +65,12 @@ variableGroups:
       - worker_placement_ads
       # Non-production-only; unused here.
       - data_volume_gb
+      # WEKA data plane — bare metal binds the physical NIC; shape-specific, not
+      # customer-facing (see the bare-metal data plane note in README.md).
+      - weka_eth_device
+      - weka_udp_mode
+      - weka_allocate_vf_per_io_node
+      - create_ensure_nics_policy
 
   - title: "WEKA (operator + image pull)"
     variables:

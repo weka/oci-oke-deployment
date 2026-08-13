@@ -382,3 +382,51 @@ variable "operator_version" {
   type        = string
   default     = "v1.14.1"
 }
+
+# ---------------------------------------------------------------------------
+# WEKA data-plane networking.
+#
+# On OCI BARE METAL, WEKA binds DPDK directly to the node's PHYSICAL interface.
+# It must NOT go through ensure-nics, which asks the Core API to create secondary
+# VNICs: that path fails on OCI (GetVnic returns an IAM denial because the worker
+# instances are in no dynamic group) and is the wrong mechanism for BM regardless
+# — granting the permission would only let it succeed at something unnecessary.
+# ---------------------------------------------------------------------------
+
+variable "weka_eth_device" {
+  description = <<-EOT
+    Physical interface WEKA binds its data plane to (WekaCluster spec.network.ethDevice).
+    When null: "ens300np0" for production (verified on BM.DenseIO.E5.128), and unset for
+    non-production, which omits the network block entirely. Interface names are
+    SHAPE-SPECIFIC — confirm with `ip -br link show` on a worker before overriding, and
+    pick the wired NIC that carries the primary VNIC (BM.DenseIO.E5.128 also has a second
+    physical NIC, ens340np0).
+  EOT
+  type        = string
+  default     = null
+}
+
+variable "weka_udp_mode" {
+  description = "WekaCluster spec.network.udpMode. false on bare metal, where DPDK drives the physical NIC directly."
+  type        = bool
+  default     = false
+}
+
+variable "weka_allocate_vf_per_io_node" {
+  description = "WekaCluster spec.network.allocateVfPerIoNode. false on OCI bare metal (no per-IO-node virtual functions)."
+  type        = bool
+  default     = false
+}
+
+variable "create_ensure_nics_policy" {
+  description = <<-EOT
+    Whether to apply the ensure-nics WekaPolicy (crds/02-ensure-nics-policy.yaml).
+    When null, it is derived: DISABLED for production (bare metal binds the physical
+    interface via weka_eth_device instead; the policy crash-loops there on a GetVnic
+    authorization error) and ENABLED for non-production, where VM workers have no
+    physical NIC to bind and secondary VNICs remain the path. The non-production
+    default is unverified — see the note in weka.tf.
+  EOT
+  type        = bool
+  default     = null
+}

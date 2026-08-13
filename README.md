@@ -197,6 +197,11 @@ in-stack helm/kubectl providers for the WEKA layer.
   capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
   availability constraint, not a config issue.)
 - **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
-  are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` and
-  `dataNICsNumber` are set from safe defaults — revisit them for throughput tuning at the largest
-  capacities.
+  are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` is
+  set from a safe default — revisit it for throughput tuning at the largest capacities.
+- **Bare-metal data plane:** WEKA binds DPDK to the node's **physical interface**
+  (`weka_eth_device`, default `ens300np0`), so the `ensure-nics` policy — which asks the OCI Core
+  API for secondary VNICs — is **not applied** in production. It cannot work there: it fails with
+  `authorization error ... operation: GetVnic` and crash-loops. Interface names are shape-specific;
+  confirm with `ip -br link show` on a worker before overriding. Non-production still uses
+  `ensure-nics` (VM workers have no physical NIC to bind) — untested since this change.

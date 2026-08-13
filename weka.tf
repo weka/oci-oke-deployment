@@ -29,7 +29,49 @@ locals {
     redundancy_level   = local.weka_redundancy
     stripe_width       = local.weka_stripe_width
     hot_spare          = local.weka_hot_spare
+
+    # Data plane. Empty string omits the whole network block from the CR (the
+    # template guards on it), which is the non-production default.
+    eth_device              = coalesce(local.weka_eth_device, "")
+    udp_mode                = var.weka_udp_mode
+    allocate_vf_per_io_node = var.weka_allocate_vf_per_io_node
   }
+
+  # ---------------------------------------------------------------------------
+  # Data-plane path, per flavor.
+  #
+  # PRODUCTION (bare metal): WEKA binds DPDK to the node's physical interface, so
+  # the CR carries spec.network.ethDevice and the ensure-nics policy is NOT
+  # applied. Testing on BM.DenseIO.E5.128 showed ensure-nics cannot work here: it
+  # calls the Core API GetVnic under the node's instance principal and gets
+  # "authorization error ... operation: GetVnic", crash-looping every pod. That is
+  # not a missing IAM policy to add — on bare metal the secondary-VNIC mechanism
+  # is simply the wrong one, and authorizing it would only let it succeed at
+  # something the physical NIC already does.
+  #
+  # NON-PRODUCTION (VM instance pools): left as-is — no ethDevice, ensure-nics
+  # still applied. VM workers have no physical NIC to bind, so secondary VNICs are
+  # presumably still the path, but this was NOT retested after the BM fix. If dev
+  # clusters fail the same way, set weka_eth_device to the VM's interface and
+  # create_ensure_nics_policy = false.
+  #
+  # NOTE: weka_data_network.tf exists only to give the NSG-less ensure-nics VNICs
+  # security coverage. With ensure-nics off, DPDK rides the primary VNIC, which IS
+  # an NSG member and already covered — so that workaround is probably redundant
+  # for production now. Left in place pending confirmation on a live BM cluster;
+  # it is harmless if unnecessary.
+  # ---------------------------------------------------------------------------
+  weka_eth_device = local.is_production ? coalesce(var.weka_eth_device, "ens300np0") : var.weka_eth_device
+
+  ensure_nics_policy = coalesce(var.create_ensure_nics_policy, !local.is_production)
+
+  # Same filenames as the fileset they replace, so for_each keys (and therefore
+  # resource addresses) are unchanged — dropping ensure-nics DELETES that one CR
+  # instead of recreating the others.
+  weka_cr_files = toset([
+    for f in fileset("${path.module}/crds", "*.yaml") : f
+    if f != "02-ensure-nics-policy.yaml" || local.ensure_nics_policy
+  ])
 
   dockerconfigjson = jsonencode({
     auths = {
@@ -124,7 +166,7 @@ resource "helm_release" "weka_operator" {
 }
 
 resource "kubectl_manifest" "weka_cr" {
-  for_each = fileset("${path.module}/crds", "*.yaml")
+  for_each = local.weka_cr_files
 
   # templatefile renders the sizing placeholders in 03-wekacluster.yaml; the other
   # CRs contain no ${...} placeholders, so they pass through unchanged.
