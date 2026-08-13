@@ -30,40 +30,50 @@ locals {
     stripe_width       = local.weka_stripe_width
     hot_spare          = local.weka_hot_spare
 
-    # Data plane. Empty string omits the whole network block from the CR (the
-    # template guards on it), which is the non-production default.
-    eth_device              = coalesce(local.weka_eth_device, "")
-    udp_mode                = var.weka_udp_mode
-    allocate_vf_per_io_node = var.weka_allocate_vf_per_io_node
+    # Data plane. An EMPTY list omits the whole network block from the CR (both
+    # templates guard on it), which is the non-bare-metal default.
+    network_subnets = local.weka_network_subnets
   }
 
   # ---------------------------------------------------------------------------
-  # Data-plane path, per flavor.
+  # Data-plane path: bare metal vs VM.
   #
-  # PRODUCTION (bare metal): WEKA binds DPDK to the node's physical interface, so
-  # the CR carries spec.network.ethDevice and the ensure-nics policy is NOT
-  # applied. Testing on BM.DenseIO.E5.128 showed ensure-nics cannot work here: it
-  # calls the Core API GetVnic under the node's instance principal and gets
-  # "authorization error ... operation: GetVnic", crash-looping every pod. That is
-  # not a missing IAM policy to add — on bare metal the secondary-VNIC mechanism
-  # is simply the wrong one, and authorizing it would only let it succeed at
-  # something the physical NIC already does.
+  # BARE METAL: the NICs are already attached, so WEKA selects them BY SUBNET and
+  # ensure-nics is NOT applied. ensure-nics asks the Core API to create secondary
+  # VNICs, which on BM fails with "authorization error ... operation: GetVnic" and
+  # crash-loops every pod. That is not a missing IAM policy to add: the
+  # secondary-VNIC mechanism is simply the wrong one here — Weka's own OCI module
+  # skips it too ("Bare metal instance detected ... NICs pre-attached").
   #
-  # NON-PRODUCTION (VM instance pools): left as-is — no ethDevice, ensure-nics
-  # still applied. VM workers have no physical NIC to bind, so secondary VNICs are
-  # presumably still the path, but this was NOT retested after the BM fix. If dev
-  # clusters fail the same way, set weka_eth_device to the VM's interface and
-  # create_ensure_nics_policy = false.
+  # Selecting by subnet rather than by interface NAME is deliberate. An ethDevice
+  # ("ens300np0") is a systemd predictable name derived from PCI topology, so it is
+  # shape-specific, unverifiable at plan time (the OCI VNIC API exposes MAC,
+  # nic-index and subnet — never the guest device name), and silently wrong the
+  # moment the shape changes. The data-path SUBNET, by contrast, is our own
+  # configuration: WEKA matches the NICs holding an address in it, per node.
+  #
+  # VM (non-production instance pools): no selectors, ensure-nics still applied.
+  # VMs have no pre-attached data NICs, so secondary VNICs remain the path. NOT
+  # retested since the BM change — if dev fails the same way, set is_bare_metal
+  # and create_ensure_nics_policy explicitly.
   #
   # NOTE: weka_data_network.tf exists only to give the NSG-less ensure-nics VNICs
-  # security coverage. With ensure-nics off, DPDK rides the primary VNIC, which IS
-  # an NSG member and already covered — so that workaround is probably redundant
-  # for production now. Left in place pending confirmation on a live BM cluster;
-  # it is harmless if unnecessary.
+  # security coverage. With ensure-nics off the data path rides the primary VNIC,
+  # which IS an NSG member and already covered — so that workaround is probably
+  # redundant on bare metal now. Left in place pending confirmation; it is harmless
+  # if unnecessary.
   # ---------------------------------------------------------------------------
-  weka_eth_device = local.is_production ? coalesce(var.weka_eth_device, "ens300np0") : var.weka_eth_device
+  # Derived, not defaulted to a literal true: BOTH zips are built from this same
+  # Terraform, and the dev zip is VM.Standard.E5.Flex. A blanket `true` would emit
+  # a bare-metal network block for VM workers.
+  is_bare_metal = var.is_bare_metal != null ? var.is_bare_metal : local.is_production
 
-  ensure_nics_policy = coalesce(var.create_ensure_nics_policy, !local.is_production)
+  # The data-path subnet the workers sit in. Read from the subnet the module built
+  # (or reused), so it is correct for create_vcn true AND false, and needs no
+  # hardcoded CIDR. Empty on VMs, which omits the network block entirely.
+  weka_network_subnets = local.is_bare_metal ? [data.oci_core_subnet.workers[0].cidr_block] : []
+
+  ensure_nics_policy = coalesce(var.create_ensure_nics_policy, !local.is_bare_metal)
 
   # Same filenames as the fileset they replace, so for_each keys (and therefore
   # resource addresses) are unchanged — dropping ensure-nics DELETES that one CR
@@ -95,6 +105,14 @@ locals {
 # (present on both the OL ORM runner and macOS) with --max-time instead of the
 # non-portable `timeout` binary; any HTTP response — even 401 — proves the TCP
 # path is up, which is all the race is about.
+# The worker (data-path) subnet, for the WEKA network selectors above. Keyed on the
+# module's own output so it resolves whether the VCN was created or reused. Only read
+# on bare metal — VMs emit no selectors and must not depend on this.
+data "oci_core_subnet" "workers" {
+  count     = local.is_bare_metal ? 1 : 0
+  subnet_id = module.oke.worker_subnet_id
+}
+
 resource "null_resource" "wait_for_kube_api" {
   depends_on = [module.oke]
 

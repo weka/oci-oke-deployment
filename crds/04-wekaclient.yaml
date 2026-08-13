@@ -11,15 +11,16 @@ spec:
   targetCluster:
     name: dev
     namespace: default
-%{ if eth_device != "" ~}
+%{ if length(network_subnets) > 0 ~}
   # MUST match the WekaCluster's network block (03-wekacluster.yaml). Without it
-  # the client defaults to the virtual-function path and requests the extended
-  # resource weka.io/weka-nics, which NOTHING advertises when the data plane binds
-  # the physical interface (no device plugin is deployed). The pods then sit
+  # the client falls back to the virtual-function path and requests the extended
+  # resource weka.io/weka-nics, which NOTHING advertises when the data plane uses
+  # pre-attached NICs (no device plugin is deployed). The client pods then sit
   # Pending forever on "Insufficient weka.io/weka-nics" while the cluster itself
-  # is perfectly Ready — the containers that bind ethDevice request zero NICs.
+  # reports Ready — containers that select by subnet request zero NICs.
   network:
-    udpMode: ${udp_mode}
-    ethDevice: ${eth_device}
-    allocateVfPerIoNode: ${allocate_vf_per_io_node}
+    selectors:
+%{ for subnet in network_subnets ~}
+      - subnet: ${subnet}
+%{ endfor ~}
 %{ endif ~}

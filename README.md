@@ -199,9 +199,11 @@ in-stack helm/kubectl providers for the WEKA layer.
 - **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
   are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` is
   set from a safe default — revisit it for throughput tuning at the largest capacities.
-- **Bare-metal data plane:** WEKA binds DPDK to the node's **physical interface**
-  (`weka_eth_device`, default `ens300np0`), so the `ensure-nics` policy — which asks the OCI Core
-  API for secondary VNICs — is **not applied** in production. It cannot work there: it fails with
-  `authorization error ... operation: GetVnic` and crash-loops. Interface names are shape-specific;
-  confirm with `ip -br link show` on a worker before overriding. Non-production still uses
-  `ensure-nics` (VM workers have no physical NIC to bind) — untested since this change.
+- **Bare-metal data plane:** on bare metal the data NICs are already attached, so WEKA selects them
+  **by subnet** — `spec.network.selectors` on both the WekaCluster and the WekaClient, filled with
+  the worker subnet the stack itself builds or reuses. Nothing shape-specific to set. Consequently
+  the `ensure-nics` policy — which asks the OCI Core API for secondary VNICs — is **not applied**:
+  it cannot work there, failing with `authorization error ... operation: GetVnic` and crash-looping.
+  `is_bare_metal` is derived from the flavor; set it explicitly only if you pair a flavor with an
+  unusual shape (e.g. a VM shape in the production zip). VMs still use `ensure-nics` (no
+  pre-attached data NICs) — untested since this change.

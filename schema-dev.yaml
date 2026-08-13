@@ -59,11 +59,9 @@ variableGroups:
       - node_shape
       - node_ocpus
       - node_memory_gb
-      # WEKA data plane. Dev keeps ensure-nics (no physical NIC to bind on a VM)
-      # and sets no ethDevice; both stay hidden. See README.md.
-      - weka_eth_device
-      - weka_udp_mode
-      - weka_allocate_vf_per_io_node
+      # WEKA data plane. VMs keep ensure-nics (no pre-attached data NICs) and emit
+      # no selectors; both stay hidden. See README.md.
+      - is_bare_metal
       - create_ensure_nics_policy
 
   - title: "WEKA (operator + image pull)"

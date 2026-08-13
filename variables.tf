@@ -386,46 +386,37 @@ variable "operator_version" {
 # ---------------------------------------------------------------------------
 # WEKA data-plane networking.
 #
-# On OCI BARE METAL, WEKA binds DPDK directly to the node's PHYSICAL interface.
-# It must NOT go through ensure-nics, which asks the Core API to create secondary
-# VNICs: that path fails on OCI (GetVnic returns an IAM denial because the worker
-# instances are in no dynamic group) and is the wrong mechanism for BM regardless
-# — granting the permission would only let it succeed at something unnecessary.
+# On BARE METAL the data NICs are already attached, so WEKA selects them BY SUBNET
+# (WekaCluster/WekaClient spec.network.selectors) and must NOT go through
+# ensure-nics, which asks the Core API to create secondary VNICs: that path fails
+# with a GetVnic authorization error and is the wrong mechanism on BM regardless —
+# granting the permission would only let it succeed at something unnecessary.
+#
+# The subnet comes from the worker subnet the stack itself builds or reuses, so
+# there is nothing shape-specific to configure and nothing to detect on a node.
 # ---------------------------------------------------------------------------
 
-variable "weka_eth_device" {
+variable "is_bare_metal" {
   description = <<-EOT
-    Physical interface WEKA binds its data plane to (WekaCluster spec.network.ethDevice).
-    When null: "ens300np0" for production (verified on BM.DenseIO.E5.128), and unset for
-    non-production, which omits the network block entirely. Interface names are
-    SHAPE-SPECIFIC — confirm with `ip -br link show` on a worker before overriding, and
-    pick the wired NIC that carries the primary VNIC (BM.DenseIO.E5.128 also has a second
-    physical NIC, ens340np0).
+    Whether the worker nodes are bare metal. Bare metal selects data NICs by subnet
+    and skips the ensure-nics policy; VMs do the opposite. When null (default), it is
+    derived from the flavor: true for production (BM.DenseIO shapes) and false for
+    non-production (VM.Standard.E5.Flex). Set it explicitly only if you pair a flavor
+    with a shape it does not normally use — e.g. a VM shape in the production zip via
+    node_shape, which needs is_bare_metal = false.
   EOT
-  type        = string
+  type        = bool
   default     = null
-}
-
-variable "weka_udp_mode" {
-  description = "WekaCluster spec.network.udpMode. false on bare metal, where DPDK drives the physical NIC directly."
-  type        = bool
-  default     = false
-}
-
-variable "weka_allocate_vf_per_io_node" {
-  description = "WekaCluster spec.network.allocateVfPerIoNode. false on OCI bare metal (no per-IO-node virtual functions)."
-  type        = bool
-  default     = false
 }
 
 variable "create_ensure_nics_policy" {
   description = <<-EOT
     Whether to apply the ensure-nics WekaPolicy (crds/02-ensure-nics-policy.yaml).
-    When null, it is derived: DISABLED for production (bare metal binds the physical
-    interface via weka_eth_device instead; the policy crash-loops there on a GetVnic
-    authorization error) and ENABLED for non-production, where VM workers have no
-    physical NIC to bind and secondary VNICs remain the path. The non-production
-    default is unverified — see the note in weka.tf.
+    When null, it is derived as the inverse of is_bare_metal: DISABLED on bare metal
+    (NICs are pre-attached and selected by subnet; the policy crash-loops there on a
+    GetVnic authorization error) and ENABLED on VMs, which have no pre-attached data
+    NICs so secondary VNICs remain the path. The VM default is unverified — see the
+    note in weka.tf.
   EOT
   type        = bool
   default     = null

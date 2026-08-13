@@ -22,12 +22,14 @@ spec:
   redundancyLevel: ${redundancy_level}
   stripeWidth: ${stripe_width}
   template: dynamic
-%{ if eth_device != "" ~}
-  # Bare metal: DPDK binds the node's PHYSICAL interface directly, so ensure-nics
-  # (secondary VNICs via the OCI Core API) is disabled — see weka.tf. ethDevice is
-  # shape-specific; verify with `ip -br link show` on a worker.
+%{ if length(network_subnets) > 0 ~}
+  # Bare metal: the data NICs are already attached, so WEKA picks the matching NIC
+  # per node from the data-path subnet and ensure-nics is not applied (see weka.tf).
+  # Selecting by subnet — not by a shape-specific ethDevice name — because the
+  # subnet is our own configuration and the guest device name is not knowable here.
   network:
-    udpMode: ${udp_mode}
-    ethDevice: ${eth_device}
-    allocateVfPerIoNode: ${allocate_vf_per_io_node}
+    selectors:
+%{ for subnet in network_subnets ~}
+      - subnet: ${subnet}
+%{ endfor ~}
 %{ endif ~}
