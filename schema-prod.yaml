@@ -19,9 +19,11 @@ logoUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAw
 informationalText: >-
   Prerequisites: a get.weka.io robot account (quay.io username + password) for the
   image pull secret. Pick a cluster capacity below — every option is a bare-metal
-  BM.DenseIO.E5.128 cluster (12 x 6.8 TB local NVMe per node) and the options are
-  labelled by WEKA usable capacity and node count, from 367 TB (8 nodes) up to
-  10 PB (171 nodes). The choice fixes the
+  DenseIO cluster labelled by WEKA usable capacity, node count and instance type,
+  from 245 TB (8 nodes) up to 10 PB (171 nodes). Most options are
+  BM.DenseIO.E5.128 (12 x 6.8 TB local NVMe per node); the 245 TB option is
+  BM.DenseIO.E4.128 (8 x 6.8 TB per node) and is usually much easier to get when E5
+  DenseIO capacity is short. The choice fixes the
   worker instance type AND node count, and BOTH are frozen after the first apply —
   changing them would destroy nodes, so deploy a new stack for a different
   capacity. NVMe capacity is scarce: if an apply
@@ -121,13 +123,16 @@ variables:
     title: Cluster capacity and worker instance type
     description: >-
       Each option fixes the node count (frozen after first apply — a resize would
-      destroy nodes; deploy a new stack for a different capacity). All options use
-      the BM.DenseIO.E5.128 bare-metal shape with 12 x 6.8 TB local NVMe per node.
+      destroy nodes; deploy a new stack for a different capacity). Most options use
+      the BM.DenseIO.E5.128 bare-metal shape (12 x 6.8 TB local NVMe per node); the
+      245 TB option uses BM.DenseIO.E4.128 (8 x 6.8 TB per node), which is often far
+      easier to obtain when E5 DenseIO capacity is unavailable.
       Capacity shown is WEKA usable, after protection and filesystem overhead. The
       8/12/16-node options run single protection (x+2+1); 21 nodes and up run double
       protection (16+4+1). For more than 10 PB usable, deploy a separate cluster.
     type: enum
     enum:
+      - 245 TB usable - 8 x BM.DenseIO.E4.128 (8 NVMe)
       - 367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)
       - 661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)
       - 955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)

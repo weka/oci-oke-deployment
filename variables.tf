@@ -206,6 +206,7 @@ variable "production_tier" {
   default     = "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)"
   validation {
     condition = contains([
+      "245 TB usable - 8 x BM.DenseIO.E4.128 (8 NVMe)",
       "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)",
       "661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)",
       "955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)",

@@ -8,7 +8,8 @@ stack so the whole path — *OKE creation → operator setup* — is Infrastruct
 The stack ships as two zips built from the same Terraform (they differ only in the bundled
 `schema.yaml`, generated from `schema-prod.yaml` / `schema-dev.yaml`) — pick one:
 
-- **Production** — local-NVMe `BM.DenseIO.E5.128`, fixed capacity options 367 TB → 10 PB (`production_tier`):
+- **Production** — local-NVMe bare-metal DenseIO (`BM.DenseIO.E5.128`, or `BM.DenseIO.E4.128` for the
+  8-node 245 TB option), fixed capacity options 245 TB → 10 PB (`production_tier`):
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-prod.zip)
 - **Dev / non-production** — block-volume drives, instance count (`node_count`):
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/weka/oci-oke-deployment/releases/latest/download/oke-weka-dev.zip)
@@ -96,12 +97,15 @@ the SSH key as **content** (`ssh_public_key`) — there are no local files on th
 1. **Resource Manager → Stacks → Create stack** from one of the release zips above (or a
    source-control config provider pointed at this repo — the working directory is the repo root).
 2. Fill the form (`schema.yaml`): compartment, **quay.io creds**, SSH key (paste content), and
-   sizing. In the **production** zip you pick a **capacity** (`production_tier`) — every option is
-   a `BM.DenseIO.E5.128` cluster (12 × 6.8 TB local NVMe per node), so the value simply fixes the
-   node count:
+   sizing. In the **production** zip you pick a **capacity** (`production_tier`) — every option is a
+   bare-metal DenseIO cluster, and the value fixes both the shape and the node count. Most options
+   are `BM.DenseIO.E5.128` (12 × 6.8 TB local NVMe per node); the 245 TB option is
+   `BM.DenseIO.E4.128` (8 × 6.8 TB per node), which is usually much easier to obtain when E5
+   DenseIO capacity is short:
 
    | Option (the value itself) | Nodes | Protection |
    |---|---|---|
+   | `245 TB usable - 8 x BM.DenseIO.E4.128 (8 NVMe)` | 8 | `5+2+1` |
    | `367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)` | 8 | `5+2+1` |
    | `661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)` | 12 | `9+2+1` |
    | `955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)` | 16 | `13+2+1` |

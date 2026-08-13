@@ -41,18 +41,32 @@ locals {
   # choice fully determines the hardware — and the guard (guard.tf) freezes it
   # after first apply, since a resize would destroy/replace nodes.
   #
-  # The ONLY supported production shape is BM.DenseIO.E5.128 (12 x 6.8 TB local
-  # NVMe = 81.6 TB raw/node, 128 cores). terraform-oci-oke omits shape_config for
-  # non-Flex shapes automatically (regexall("Flex", ...)), so the ocpus/memory
-  # below are informational — the bare-metal shape fixes them.
+  # Two bare-metal DenseIO shapes are supported:
+  #   BM.DenseIO.E5.128 — 12 x 6.8 TB local NVMe (81.6 TB raw/node), 1536 GB, 128 cores
+  #   BM.DenseIO.E4.128 —  8 x 6.8 TB local NVMe (54.4 TB raw/node), 2048 GB, 128 cores
+  # E5 is the primary ladder (8 nodes to 171); E4 exists as an 8-node option because
+  # E5 DenseIO capacity is frequently unavailable, and E4 is much less contended.
+  # terraform-oci-oke omits shape_config for non-Flex shapes automatically
+  # (regexall("Flex", ...)), so the ocpus/memory below are informational — the
+  # bare-metal shape fixes them.
   #
-  # Capacity therefore scales purely by NODE COUNT:
+  # Within a shape, capacity scales purely by NODE COUNT:
   #   - 8 / 12 / 16 nodes: sub-PB entry sizes, single protection (SW = N-3, RL 2).
   #   - 21 nodes and up:   double protection (16+4+1), where each +17 nodes adds
   #     ~1 PB usable — hence the 21 -> 35 -> 52 -> ... -> 171 ladder up to 10 PB.
   # The capacity in each key is what cluster_usable_tb computes below, rounded.
   # ---------------------------------------------------------------------------
   tier_specs = {
+    # E4 (previous generation): 8 x 6.8 TB NVMe and 2048 GB per node, vs E5's 12
+    # NVMe and 1536 GB (both 128 OCPU) — specs from `oci compute shape list` and
+    # confirmed against Weka's own shape table in terraform-oci-weka. Less capacity
+    # per node, but markedly easier to get: E5 DenseIO in eu-frankfurt-1 was
+    # repeatedly short through a day of testing while E4 provisioned every time.
+    # Same protection scheme as the 8-node E5 tier (5+2+1) since that derives from
+    # node count, and the data plane is identical — NICs are selected by subnet, not
+    # by a shape-specific device name (see weka.tf).
+    "245 TB usable - 8 x BM.DenseIO.E4.128 (8 NVMe)" = { shape = "BM.DenseIO.E4.128", ocpus = 128, memory = 2048, node_count = 8, drives_per_node = 8 }
+
     "367 TB usable - 8 x BM.DenseIO.E5.128 (12 NVMe)"  = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 8, drives_per_node = 12 }
     "661 TB usable - 12 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 12, drives_per_node = 12 }
     "955 TB usable - 16 x BM.DenseIO.E5.128 (12 NVMe)" = { shape = "BM.DenseIO.E5.128", ocpus = 128, memory = 1536, node_count = 16, drives_per_node = 12 }
