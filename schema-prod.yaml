@@ -110,7 +110,7 @@ variables:
   operator_version:
     title: WEKA operator version
     type: string
-    default: v1.14.1
+    default: v1.15.3
     required: true
 
   # --- Cluster capacity (fixed shape + node count, frozen after first apply) ---

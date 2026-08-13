@@ -47,4 +47,4 @@ quay_password = "..."
 
 # --- Optional cluster/operator overrides (defaults shown) ---
 # cluster_name     = "weka-cluster"
-# operator_version = "v1.14.1"
+# operator_version = "v1.15.3"
