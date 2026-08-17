@@ -109,8 +109,9 @@ locals {
   # Worker count + WEKA protection scheme.
   #
   # Production: the selected tier fixes both node COUNT and per-node raw NVMe
-  # (drives_per_node x 6.8 TB). Non-production uses var.node_count directly (drives
-  # come from a block volume sized by data_volume_gb, not local NVMe).
+  # (drives_per_node x 6.8 TB), unless var.production_node_count overrides the
+  # count — see that variable for why. Non-production uses var.node_count directly
+  # (drives come from a block volume sized by data_volume_gb, not local NVMe).
   #
   # WEKA usable = (N - HS) x rawPerNode x SW/(SW + RL) x 0.9, protection adapting
   # to cluster size:
@@ -124,7 +125,7 @@ locals {
   # Raw local-NVMe TB per production worker = drives on the selected tier x 6.8 TB.
   nvme_tb_per_node = local.is_production ? local.selected_tier.drives_per_node * 6.8 : 0
 
-  effective_node_count = local.is_production ? local.selected_tier.node_count : var.node_count
+  effective_node_count = local.is_production ? coalesce(var.production_node_count, local.selected_tier.node_count) : var.node_count
 
   # Protection scheme + capacity implied by the chosen count (surfaced in outputs).
   weka_redundancy   = local.effective_node_count >= 21 ? 4 : 2

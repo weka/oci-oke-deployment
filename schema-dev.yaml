@@ -43,6 +43,7 @@ variableGroups:
       - flavor
       # Production-only knobs — unused / hidden in the dev zip.
       - production_tier
+      - production_node_count
       - skip_capacity_preflight
       - worker_placement_ads
       - data_volume_gb

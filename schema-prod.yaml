@@ -65,6 +65,9 @@ variableGroups:
       - node_memory_gb
       - node_count
       - worker_placement_ads
+      # Testing override — contradicts the capacity the tier advertises, so it is
+      # reachable only by passing the variable explicitly (see variables.tf).
+      - production_node_count
       # Non-production-only; unused here.
       - data_volume_gb
       # WEKA data plane — bare metal selects data NICs by subnet; derived from the

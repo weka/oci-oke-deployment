@@ -255,6 +255,34 @@ variable "node_memory_gb" {
   default     = null
 }
 
+# Completes the override set above: shape, OCPU and memory could already be
+# decoupled from the tier, but the node COUNT could not, so testing a bare-metal
+# change with fewer hosts than the smallest tier's 8 meant adding a throwaway tier
+# to local.tier_specs plus matching schema and validation entries.
+#
+# Nothing derived from the count needs special handling: protection, raw/usable
+# capacity, the weka_sizing output and the node-pool size all read
+# local.effective_node_count, so 6 hosts derives 3+2+1 (SW = 6-2-1) — WEKA's
+# minimum viable layout — with no other edits.
+#
+# Hidden from both schemas (it contradicts the capacity the tier name advertises),
+# so it is reachable only by passing the variable explicitly, e.g. `make apply
+# NODES=6`. NOT frozen by guard.tf, unlike node_count and production_tier:
+# changing it on a live stack WILL destroy and replace workers.
+variable "production_node_count" {
+  description = "Optional override for the production worker count. When null, derived from production_tier. Intended for testing a bare-metal change on fewer hosts than the smallest tier requires; the tier still fixes the shape and per-node drives, so the advertised usable capacity no longer applies. Minimum 6."
+  type        = number
+  default     = null
+  validation {
+    # coalesce, NOT `x == null || x >= 6`: Terraform's || does not short-circuit, so
+    # the default null still reaches `null >= 6` and the plan dies with "argument
+    # must not be null" — on the ORM runner only, since `terraform validate` never
+    # evaluates validation conditions.
+    condition     = coalesce(var.production_node_count, 6) >= 6
+    error_message = "production_node_count must be at least 6 (WEKA needs enough nodes to form a cluster)."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Worker node pool (converged WEKA nodes).
 #
