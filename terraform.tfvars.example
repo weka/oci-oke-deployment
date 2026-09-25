@@ -47,4 +47,14 @@ quay_password = "..."
 
 # --- Optional cluster/operator overrides (defaults shown) ---
 # cluster_name     = "weka-cluster"
-# operator_version = "v1.15.3"
+# operator_version = "v1.16.1"
+
+# --- WekaCluster dynamicTemplate (optional; all unset = operator sizes the cluster) ---
+# Leave these alone unless you need to pin a specific layout: with none of them set
+# the dynamicTemplate block is omitted from the CR and the operator derives the
+# layout from what the nodes report. Setting one pins only that field.
+# weka_compute_containers = 8    # cluster-wide compute container count
+# weka_compute_cores      = 4    # cores per compute container
+# weka_drive_containers   = 8    # cluster-wide drive container count
+# weka_drive_cores        = 12   # cores per drive container
+# weka_num_drives         = 12   # drives per node

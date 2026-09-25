@@ -15,20 +15,28 @@ locals {
   operator_namespace     = "weka-operator-system"
   pull_secret_namespaces = toset([local.operator_namespace, "default"])
 
+  # Null overrides are dropped, so an unset field never reaches the CR and the
+  # empty default map omits the dynamicTemplate block altogether (the template
+  # guards on length). See variables.tf for what that leaves to the operator.
+  weka_dynamic_template = {
+    for field, value in {
+      computeContainers = var.weka_compute_containers
+      computeCores      = var.weka_compute_cores
+      driveContainers   = var.weka_drive_containers
+      driveCores        = var.weka_drive_cores
+      numDrives         = var.weka_num_drives
+    } : field => value if value != null
+  }
+
   # Values injected into the WekaCluster CR (crds/03-wekacluster.yaml) via
-  # templatefile(), so the WEKA software layout matches the provisioned hardware:
-  # one compute + one drive container per node, drives/node and protection scheme
-  # from the sizing locals in main.tf. driveCores defaults to one core per drive
-  # (matches the historical 1:1); revisit for perf tuning on the largest tiers.
-  # Non-production keeps 1 drive (block volume) / 1 drive core.
+  # templatefile(). The protection scheme stays Terraform-derived (it follows from
+  # the node count, which the stack fixes) while the container/core layout is left
+  # to the operator unless explicitly overridden.
   weka_cr_vars = {
-    compute_containers = local.effective_node_count
-    drive_containers   = local.effective_node_count
-    num_drives         = local.is_production ? local.selected_tier.drives_per_node : 1
-    drive_cores        = local.is_production ? local.selected_tier.drives_per_node : 1
-    redundancy_level   = local.weka_redundancy
-    stripe_width       = local.weka_stripe_width
-    hot_spare          = local.weka_hot_spare
+    dynamic_template = local.weka_dynamic_template
+    redundancy_level = local.weka_redundancy
+    stripe_width     = local.weka_stripe_width
+    hot_spare        = local.weka_hot_spare
 
     # Data plane. An EMPTY list omits the whole network block from the CR (both
     # templates guard on it), which is the non-bare-metal default.

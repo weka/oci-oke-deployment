@@ -4,15 +4,14 @@ metadata:
   name: dev
   namespace: default
 spec:
-  # Rendered by weka.tf via templatefile() from the selected sizing tier
-  # (production) or node_count (non-production). One compute + one drive container
-  # per worker node; numDrives = local NVMe drives per node; the protection scheme
+  # Rendered by weka.tf via templatefile(). The protection scheme
   # (stripeWidth + redundancyLevel + hotSpare) is derived so SW+RL+HS == node count.
+%{ if length(dynamic_template) > 0 ~}
   dynamicTemplate:
-    computeContainers: ${compute_containers}
-    driveContainers: ${drive_containers}
-    driveCores: ${drive_cores}
-    numDrives: ${num_drives}
+%{ for field, value in dynamic_template ~}
+    ${field}: ${value}
+%{ endfor ~}
+%{ endif ~}
   gracefulDestroyDuration: 0s
   hotSpare: ${hot_spare}
   image: quay.io/weka.io/weka-in-container:5.1.24
