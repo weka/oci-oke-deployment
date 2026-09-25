@@ -98,10 +98,14 @@ variable "cluster_type" {
   default     = "basic"
 }
 
+# npn gives pods routable VCN addresses instead of a flannel overlay, so it needs
+# a pod subnet distinct from the worker one: OKE attaches a second VNIC per worker
+# there and assigns it 31 pod IPs. That subnet (and its NSG) comes from the `pods`
+# entry in default_subnets (main.tf), which the module builds only under npn.
 variable "cni_type" {
-  description = "Pod networking CNI: flannel or npn."
+  description = "Pod networking CNI: flannel (overlay) or npn (VCN-native, pods get VCN IPs from a dedicated pod subnet)."
   type        = string
-  default     = "flannel"
+  default     = "npn"
 }
 
 variable "control_plane_is_public" {
@@ -379,7 +383,7 @@ variable "vcn_id" {
 }
 
 variable "subnets" {
-  description = "Override the module subnets map. null => module defaults (fresh subnets). When reusing existing network, set { cp = { id = ... }, workers = { id = ... }, pub_lb = { id = ... } }."
+  description = "Override the module subnets map. null => module defaults (fresh subnets). When reusing existing network, set { cp = { id = ... }, workers = { id = ... }, pods = { id = ... }, pub_lb = { id = ... } } — `pods` must be a subnet distinct from `workers`, since cni_type = npn puts pod IPs there."
   type        = any
   default     = null
 }

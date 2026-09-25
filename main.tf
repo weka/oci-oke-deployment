@@ -275,6 +275,10 @@ locals {
   # The module's own default subnet/NSG maps. We pass these when building a
   # fresh VCN so that a null `subnets`/`nsgs` var keeps the module defaults,
   # while still letting callers override for existing-network reuse.
+  #
+  # `pods` is sized here under both CNIs: the module reserves its CIDR either way
+  # and only materializes the subnet under npn, so flipping cni_type renumbers
+  # none of the others.
   default_subnets = {
     bastion  = { newbits = 13 }
     operator = { newbits = 13 }
