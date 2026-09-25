@@ -193,9 +193,9 @@ jobs:
           done
 
       # Notes carry the commits themselves rather than a compare link, and a
-      # "Deploy to Oracle Cloud" button per zip. The buttons point at THIS tag's
-      # assets, not at /latest/download/, so an old release keeps deploying the
-      # stack it shipped with.
+      # "Deploy to Oracle Cloud" button for the production zip. The button points
+      # at THIS tag's assets, not at /latest/download/, so an old release keeps
+      # deploying the stack it shipped with.
       - name: Compose release notes
         run: |
           set -euo pipefail
@@ -211,9 +211,7 @@ jobs:
           {
             echo "## Deploy"
             echo
-            echo "Production (local-NVMe DenseIO) — [![Deploy to Oracle Cloud](${badge})](${create}${assets}/oke-weka-prod.zip)"
-            echo
-            echo "Non-production (block volumes) — [![Deploy to Oracle Cloud](${badge})](${create}${assets}/oke-weka-dev.zip)"
+            echo "[![Deploy to Oracle Cloud](${badge})](${create}${assets}/oke-weka-prod.zip)"
             echo
             echo "## Commits"
             echo
