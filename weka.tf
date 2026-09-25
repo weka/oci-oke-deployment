@@ -168,6 +168,11 @@ resource "helm_release" "weka_operator" {
   version    = var.operator_version
   namespace  = kubernetes_namespace_v1.operator.metadata[0].name
 
+  set = [{
+    name  = "cleanupRemovedNodes"
+    value = "true"
+  }]
+
   # Chart-bundled CRDs install automatically; wait=true blocks until the release
   # is ready before the CRs apply.
   depends_on = [kubernetes_secret_v1.quay, module.oke, null_resource.wait_for_kube_api]
