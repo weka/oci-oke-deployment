@@ -8,9 +8,16 @@
 # worker shape across every AD in the region BEFORE anything is created, and
 # hard-fails with an actionable message when none of them have capacity.
 #
-# Caveats (both bypassable via skip_capacity_preflight):
-#   - The report is a strong signal, not a guarantee — it can occasionally say
-#     OUT_OF_HOST_CAPACITY for a shape that would actually provision.
+# Caveats (all bypassable via skip_capacity_preflight):
+#   - The report is a signal, not a guarantee, and it is wrong in BOTH
+#     directions: it can say OUT_OF_HOST_CAPACITY for a shape that would
+#     provision, and on 2026-09-25 all three eu-frankfurt-1 ADs reported
+#     AVAILABLE for BM.DenseIO.E5.128 both before and two hours after an 8-node
+#     apply that failed with "Out of host capacity" on 2 of the 8.
+#   - It cannot be tightened into a host-COUNT gate, which is the obvious next
+#     move when the above bites: OCI returns available_count = null for these
+#     shapes (verified per-AD and per-fault-domain, bare metal and flex), so
+#     there is no number to compare effective_node_count against.
 #   - Reading it needs the "inspect compute-capacity-reports" permission; a
 #     tenancy without it fails on the report itself.
 #

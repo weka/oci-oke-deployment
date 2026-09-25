@@ -102,9 +102,14 @@ stack's own region; local runs set it in tfvars.
 
 Expected OCI availability constraint, not a bug — the production DenseIO shape
 (`BM.DenseIO.E5.128`) is scarce, and the larger capacity options need tens to hundreds of free
-bare-metal hosts (the preflight only checks shape availability per AD, not host count).
-The stack's `capacity.tf` preflight
-fails fast at apply. Retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
+bare-metal hosts (the preflight only checks shape availability per AD, not host count — and it
+cannot be extended to count, because OCI returns `available_count = null` for these shapes;
+verified per-AD and per-fault-domain in eu-frankfurt-1).
+An AD reporting `AVAILABLE` therefore does not mean it has enough hosts, or any: on 2026-09-25 all
+three ADs reported `AVAILABLE` both before and two hours after an 8-node E5.128 apply that failed
+on 2 of the 8. Expect to hit this *during* the node-pool build, after the VCN and control plane are
+already up, and to need a `terraform destroy` before retrying.
+Retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
 try another region, or use the dev (non-production) zip (Standard shapes, abundant quota).
 
 ## 7. Workers never join because the WEKA tuning part blocked cloud-init (`enable --now`)
