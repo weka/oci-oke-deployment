@@ -150,6 +150,7 @@ jobs:
           # On the main path the tag does not exist yet — `gh release create`
           # below creates it, pointed at exactly this commit.
           ref: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+          fetch-depth: 0 # need full history + tags to list this release's commits
 
       # Both zips are built in one job so a single upload publishes them
       # together — two parallel jobs would race on the same release.
@@ -191,6 +192,35 @@ jobs:
             git checkout -- variables.tf
           done
 
+      # Notes carry the commits themselves rather than a compare link, and a
+      # "Deploy to Oracle Cloud" button per zip. The buttons point at THIS tag's
+      # assets, not at /latest/download/, so an old release keeps deploying the
+      # stack it shipped with.
+      - name: Compose release notes
+        run: |
+          set -euo pipefail
+
+          assets="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          badge="https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg"
+          create="https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl="
+
+          # On the hand-pushed-tag path $TAG already exists; dropping it makes
+          # the range start at the previous release either way.
+          prev="$(git tag -l 'v*' --sort=-v:refname | grep -vFx "$TAG" | head -1 || true)"
+
+          {
+            echo "## Deploy"
+            echo
+            echo "Production (local-NVMe DenseIO) — [![Deploy to Oracle Cloud](${badge})](${create}${assets}/oke-weka-prod.zip)"
+            echo
+            echo "Non-production (block volumes) — [![Deploy to Oracle Cloud](${badge})](${create}${assets}/oke-weka-dev.zip)"
+            echo
+            echo "## Commits"
+            echo
+            # Bare short SHAs autolink to the commit in release bodies.
+            git log --no-merges --format='- %s (%h)' "${prev:+${prev}..}HEAD"
+          } | tee "${RUNNER_TEMP}/notes.md"
+
       # The release is created only after the zips build, so a failed build
       # never leaves a published-but-empty release behind. `--target` makes
       # `gh` create the tag itself, at this exact commit.
@@ -209,7 +239,7 @@ jobs:
             || gh release create "$TAG" \
                  --target "$GITHUB_SHA" \
                  --title "$TAG" \
-                 --generate-notes
+                 --notes-file "${RUNNER_TEMP}/notes.md"
           gh release upload "$TAG" \
             "${RUNNER_TEMP}/oke-weka-prod.zip" "${RUNNER_TEMP}/oke-weka-dev.zip" --clobber
           gh release view "$TAG" --json tagName,assets \
