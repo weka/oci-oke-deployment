@@ -409,7 +409,50 @@ variable "quay_password" {
 variable "operator_version" {
   description = "WEKA operator Helm chart version."
   type        = string
-  default     = "v1.15.3"
+  default     = "v1.16.1"
+}
+
+# ---------------------------------------------------------------------------
+# WekaCluster dynamicTemplate overrides.
+#
+# Every one is null by default, which omits the field from the CR — and when all
+# five are null, the dynamicTemplate block itself is omitted and the operator
+# sizes the cluster on its own from what the nodes actually report. That is the
+# intended path: the operator sees the real cores, drives and memory per node,
+# which Terraform can only approximate from the shape.
+#
+# Set one to pin that single field; the rest stay operator-calculated. Values are
+# PER CONTAINER for the *Cores fields and PER NODE for numDrives, matching the
+# WekaCluster CRD.
+# ---------------------------------------------------------------------------
+variable "weka_compute_containers" {
+  description = "Optional override for WekaCluster dynamicTemplate.computeContainers (cluster-wide count). When null, the operator decides."
+  type        = number
+  default     = null
+}
+
+variable "weka_compute_cores" {
+  description = "Optional override for WekaCluster dynamicTemplate.computeCores (cores per compute container). When null, the operator decides."
+  type        = number
+  default     = null
+}
+
+variable "weka_drive_containers" {
+  description = "Optional override for WekaCluster dynamicTemplate.driveContainers (cluster-wide count). When null, the operator decides."
+  type        = number
+  default     = null
+}
+
+variable "weka_drive_cores" {
+  description = "Optional override for WekaCluster dynamicTemplate.driveCores (cores per drive container). When null, the operator decides."
+  type        = number
+  default     = null
+}
+
+variable "weka_num_drives" {
+  description = "Optional override for WekaCluster dynamicTemplate.numDrives (drives per node). When null, the operator discovers them."
+  type        = number
+  default     = null
 }
 
 # ---------------------------------------------------------------------------

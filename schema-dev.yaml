@@ -64,6 +64,13 @@ variableGroups:
       # no selectors; both stay hidden. See README.md.
       - is_bare_metal
       - create_ensure_nics_policy
+      # WekaCluster dynamicTemplate overrides — all null, so the operator sizes
+      # the cluster itself. Reachable only by passing the variable explicitly.
+      - weka_compute_containers
+      - weka_compute_cores
+      - weka_drive_containers
+      - weka_drive_cores
+      - weka_num_drives
 
   - title: "WEKA (operator + image pull)"
     variables:
@@ -114,7 +121,7 @@ variables:
   operator_version:
     title: WEKA operator version
     type: string
-    default: v1.15.3
+    default: v1.16.1
     required: true
 
   # --- Cluster size ---
