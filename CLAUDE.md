@@ -33,6 +33,12 @@ Existing comments in `variables.tf` that explain *why* a default is what it is
 (e.g. `region` having no default on purpose) are the bar — they carry
 information the reader cannot recover from the code.
 
+The test is what happens when the code is wrong. Comment what fails *silently*,
+at apply time, or in only one environment — those cost a cycle to rediscover.
+Say nothing about syntax, types, or provider API shape: `terraform validate` and
+the provider schema reject those instantly and loudly, so the comment buys
+nothing even when it is accurate.
+
 ## Terraform defaults must match the stack defaults
 
 A `terraform apply` with no tfvars must produce the same deployment as the ORM
