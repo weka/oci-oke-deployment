@@ -81,3 +81,18 @@ output "verify_commands" {
     kubectl get wekapolicy,wekacluster,wekaclient -n default
   EOT
 }
+
+# --- Troubleshooting ---
+# Interpolates input variables only. Anything derived from a created resource is
+# missing from a failed job's state, so it would drop off the Application
+# Information tab on exactly the applies this output exists for.
+output "troubleshooting" {
+  description = "Commands for diagnosing a running or failed apply of this stack."
+  value       = <<-EOT
+    # stage of a running or failed job (same stream as the job's Logs tab)
+    oci resource-manager job get-job-logs-content --job-id <job-ocid> --region ${var.region} --query data --raw-output
+
+    # why a worker node pool failed; Terraform's error prints the work-request OCID
+    oci ce work-request-error list --work-request-id <work-request-ocid> --compartment-id ${var.compartment_ocid} --region ${var.region}
+  EOT
+}

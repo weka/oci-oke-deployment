@@ -28,8 +28,10 @@ informationalText: >-
   changing them would destroy nodes, so deploy a new stack for a different
   capacity. NVMe capacity is scarce: if an apply
   fails with "Out of host capacity", try another region or pin an availability
-  domain. After apply, the Application Information tab gives you a one-click
-  kubeconfig command and a link straight to the cluster.
+  domain. While an apply runs, Jobs > the job > Logs shows the stage it is on —
+  the job's status field does not refresh on its own. After apply, the
+  Application Information tab gives you a one-click kubeconfig command and a
+  link straight to the cluster.
 
 variableGroups:
   - title: "Hidden"
@@ -225,6 +227,10 @@ outputs:
     type: string
     title: "Applied WEKA custom resources"
     visible: true
+  troubleshooting:
+    type: copyableString
+    title: "Commands"
+    visible: true
 
 outputGroups:
   - title: "Access your cluster"
@@ -239,6 +245,9 @@ outputGroups:
       - region
       - operator_namespace
       - applied_custom_resources
+  - title: "Troubleshooting"
+    outputs:
+      - troubleshooting
 
 # Primary call-to-action button on the Application Information tab.
 primaryOutputButton: console_url

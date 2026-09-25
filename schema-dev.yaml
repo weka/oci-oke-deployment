@@ -20,8 +20,10 @@ informationalText: >-
   image pull secret. This is the non-production stack — VM.Standard workers with
   block-volume WEKA drives (abundant quota, not for IO performance). Set the
   instance count below (min 6). It is frozen after the first apply, along with
-  networking. After apply, the Application Information tab gives you a one-click
-  kubeconfig command and a link straight to the cluster.
+  networking. While an apply runs, Jobs > the job > Logs shows the stage it is
+  on — the job's status field does not refresh on its own. After apply, the
+  Application Information tab gives you a one-click kubeconfig command and a
+  link straight to the cluster.
 
 variableGroups:
   - title: "Hidden"
@@ -194,6 +196,10 @@ outputs:
     type: string
     title: "Applied WEKA custom resources"
     visible: true
+  troubleshooting:
+    type: copyableString
+    title: "Commands"
+    visible: true
 
 outputGroups:
   - title: "Access your cluster"
@@ -208,6 +214,9 @@ outputGroups:
       - region
       - operator_namespace
       - applied_custom_resources
+  - title: "Troubleshooting"
+    outputs:
+      - troubleshooting
 
 # Primary call-to-action button on the Application Information tab.
 primaryOutputButton: console_url
