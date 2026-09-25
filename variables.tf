@@ -289,7 +289,7 @@ variable "production_node_count" {
 # var.flavor by default but can be overridden with the variables above.
 # ---------------------------------------------------------------------------
 variable "node_pool_name" {
-  description = "Name of the worker node pool."
+  description = "Name of the worker node pool. Used as a prefix (<name>-ad<N>) when capacity_reservation_ids creates one pool per reservation."
   type        = string
   default     = "converged"
 }
@@ -326,13 +326,16 @@ variable "worker_placement_ads" {
   default     = ""
 }
 
-variable "capacity_reservation_id" {
+variable "capacity_reservation_ids" {
   description = <<-EOT
-    OCID of a compute capacity reservation to launch the worker nodes into. Empty
-    (default) launches on demand. Requires worker_placement_ads to name the single
-    AD the reservation lives in.
+    Comma-separated OCIDs of compute capacity reservations to launch the worker
+    nodes into. Empty (default) launches on demand.
+    A reservation lives in one AD, so give one per AD you want to build in; the
+    nodes are split evenly across them and worker_placement_ads must be left empty
+    (placement comes from the reservations). See TROUBLESHOOTING.md section 6 for
+    when to spread and what it costs.
     Reserved hosts bill from creation whether or not they run; delete the
-    reservation as well as the stack when you are done with it.
+    reservations as well as the stack when you are done with them.
   EOT
   type        = string
   default     = ""

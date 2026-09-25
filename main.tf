@@ -300,58 +300,65 @@ locals {
   }
 
   # ---------------------------------------------------------------------------
-  # Single converged node pool (WEKA backends + clients).
+  # Converged worker pool definition (WEKA backends + clients).
   #
-  # merge() layer 1 (base): shape/sizing/labels/cloud-init — same for both flavors.
-  # merge() layer 2 (placement): optionally pin ADs via placement_ads when
-  #   var.worker_placement_ads is set (e.g. to steer DenseIO around out-of-capacity
-  #   ADs). Empty => module default (all ADs).
-  # merge() layer 3 (capacity reservation): launch into reserved hosts instead of
-  #   on demand. capacity.tf gates the AD and host count before anything is built.
-  # merge() layer 4 (block volume): non-production only — attach a paravirtualized
-  #   block volume as WEKA drives. Production (DenseIO) has local NVMe presented
-  #   automatically by the hypervisor; no block volume is needed or attached.
+  # Everything except size and placement is identical across pools and flavors.
+  # Non-production additionally attaches a paravirtualized block volume as WEKA
+  # drives; production (DenseIO) gets local NVMe from the hypervisor.
   # ---------------------------------------------------------------------------
-  worker_pools = {
-    (var.node_pool_name) = merge(
+  worker_pool_base = merge(
+    {
+      description      = "WEKA converged node pool (flavor=${var.flavor})"
+      mode             = local.worker_mode
+      shape            = local.node_shape
+      ocpus            = local.node_ocpus
+      memory           = local.node_memory_gb
+      boot_volume_size = var.node_boot_volume_gb
+      # WEKA converged node labels (backends + clients).
+      node_labels = {
+        "weka.io/tool"              = "terraform-oci-oke"
+        "weka.io/supports-backends" = "true"
+        "weka.io/supports-clients"  = "true"
+      }
+      # Let terraform-oci-oke run its native node bootstrap (writes /etc/oke/*
+      # and runs oke-init.service) — REQUIRED for self-managed instance-pool
+      # workers to join. Our WEKA tuning rides along as a supplementary
+      # cloud_init part (see cloud-init comment above).
+      disable_default_cloud_init = false
+      cloud_init = [{
+        content      = local.worker_cloud_init
+        content_type = "text/cloud-config"
+      }]
+    },
+    local.is_production ? {} : {
+      disable_block_volume     = false
+      block_volume_size_in_gbs = var.data_volume_gb
+      block_volume_type        = "paravirtualized"
+    }
+  )
+
+  # ---------------------------------------------------------------------------
+  # One pool per capacity reservation (each reservation lives in a single AD and
+  # the module allows only one AD per pool), otherwise a single pool over the ADs
+  # named by worker_placement_ads — or all of them when it is empty.
+  # ---------------------------------------------------------------------------
+  worker_pools = local.has_capacity_reservation ? {
+    for p in local.reservation_pools : "${var.node_pool_name}-ad${p.ad_number}" => merge(
+      local.worker_pool_base,
       {
-        description      = "WEKA converged node pool (flavor=${var.flavor})"
-        mode             = local.worker_mode
-        size             = local.effective_node_count
-        shape            = local.node_shape
-        ocpus            = local.node_ocpus
-        memory           = local.node_memory_gb
-        boot_volume_size = var.node_boot_volume_gb
-        # WEKA converged node labels (backends + clients).
-        node_labels = {
-          "weka.io/tool"              = "terraform-oci-oke"
-          "weka.io/supports-backends" = "true"
-          "weka.io/supports-clients"  = "true"
-        }
-        # Let terraform-oci-oke run its native node bootstrap (writes /etc/oke/*
-        # and runs oke-init.service) — REQUIRED for self-managed instance-pool
-        # workers to join. Our WEKA tuning rides along as a supplementary
-        # cloud_init part (see cloud-init comment above).
-        disable_default_cloud_init = false
-        cloud_init = [{
-          content      = local.worker_cloud_init
-          content_type = "text/cloud-config"
-        }]
-      },
+        size                    = p.size
+        placement_ads           = [p.ad_number]
+        capacity_reservation_id = p.reservation_id
+      }
+    )
+    } : {
+    (var.node_pool_name) = merge(
+      local.worker_pool_base,
+      { size = local.effective_node_count },
       # AD pinning — preserved from the original stack.
       var.worker_placement_ads != "" ? {
         placement_ads = [for n in split(",", var.worker_placement_ads) : tonumber(trimspace(n))]
       } : {},
-      local.has_capacity_reservation ? {
-        capacity_reservation_id = var.capacity_reservation_id
-      } : {},
-      # Non-production only: attach a paravirtualized block volume as WEKA drives.
-      # Production (DenseIO node-pool) uses local NVMe — no block volume attached.
-      local.is_production ? {} : {
-        disable_block_volume     = false
-        block_volume_size_in_gbs = var.data_volume_gb
-        block_volume_type        = "paravirtualized"
-      }
     )
   }
 }

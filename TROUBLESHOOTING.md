@@ -110,10 +110,21 @@ three ADs reported `AVAILABLE` both before and two hours after an 8-node E5.128 
 on 2 of the 8. Expect to hit this *during* the node-pool build, after the VCN and control plane are
 already up, and to need a `terraform destroy` before retrying.
 The only fix that cannot fail for capacity is to reserve the hosts up front: create a compute
-capacity reservation (no minimum term — delete it when you are done, but it bills from creation),
-then set `capacity_reservation_id` and point `worker_placement_ads` at the reservation's AD. The
-stack verifies the reservation is in that AD and holds enough hosts before it builds anything,
-which matters because OCI fills a reservation partially when it is short.
+capacity reservation (no minimum term — delete it when you are done, but it bills from creation)
+and set `capacity_reservation_ids`. A reservation lives in a single AD, so create **one per AD**
+and pass them comma-separated; the stack builds one worker pool per reservation and splits the
+nodes evenly across them. That matters — reserving 3+3+2 across three ADs is far easier to obtain
+than 8 hosts in one AD, which is exactly the spread that failed here. Leave `worker_placement_ads`
+empty; placement comes from the reservations. The stack verifies each reservation holds enough
+hosts of the right shape before it builds anything, because OCI fills a reservation partially
+when it is short.
+
+Spreading is a *provisioning* fallback, not a resilience win, and it is not free. WEKA's protection
+level is derived from the node count alone (2 below 21 nodes), and the operator has no concept of
+availability domains — so with 8 nodes split 3/3/2, losing any one AD drops 3 nodes, exceeds the
+protection level, and takes the filesystem down. Spreading over three ADs therefore turns one fatal
+AD outage into three, and puts the WEKA data path on inter-AD latency for every write. Prefer a
+single AD when you can get the hosts; spread when you cannot.
 Otherwise: retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
 try another region, or use the dev (non-production) zip (Standard shapes, abundant quota).
 

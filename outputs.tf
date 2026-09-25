@@ -52,6 +52,9 @@ output "weka_sizing" {
     # Flag the override, or the tier name above reads as a promise the raw/usable
     # lines below no longer keep (they are recomputed from the actual count).
     "workers:       ${local.effective_node_count}${var.production_node_count != null ? " (production_node_count override; tier implies ${local.selected_tier.node_count})" : ""}",
+    # Which AD owns which nodes is otherwise invisible, and it is what you need
+    # when one pool of several fails to build.
+    "placement:     ${local.has_capacity_reservation ? join(", ", [for p in local.reservation_pools : "AD-${p.ad_number}: ${p.size}"]) : "on demand, ${var.worker_placement_ads != "" ? "AD(s) ${var.worker_placement_ads}" : "all ADs"}"}",
     "protection:    ${local.weka_stripe_width}+${local.weka_redundancy}+${local.weka_hot_spare} (stripe width + redundancy + hot spare)",
     "raw:           ${format("%.1f", local.cluster_raw_tb)} TB (${local.effective_node_count} x ${format("%.1f", local.nvme_tb_per_node)} TB/node = ${local.selected_tier.drives_per_node} x 6.8 TB NVMe)",
     "usable:        ~${format("%.1f", local.cluster_usable_tb)} TB",

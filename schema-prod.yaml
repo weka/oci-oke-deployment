@@ -96,7 +96,7 @@ variableGroups:
 
   - title: "Worker placement (optional)"
     variables:
-      - capacity_reservation_id
+      - capacity_reservation_ids
       - worker_placement_ads
 
   - title: "Networking"
@@ -171,22 +171,25 @@ variables:
     default: false
 
   # --- Worker placement (optional) ---
-  capacity_reservation_id:
-    title: Capacity reservation OCID
+  capacity_reservation_ids:
+    title: Capacity reservation OCIDs
     description: >-
       Leave empty to launch on demand. Reserve the hosts first (Compute > Capacity
-      Reservations) and paste the OCID here to guarantee them. The stack checks the
-      reservation is in the AD below and actually holds enough hosts before building
-      anything. Reserved hosts bill from creation whether or not they run, so delete
-      the reservation when you are done.
+      Reservations) and paste the OCIDs here, comma-separated — the only way an
+      apply cannot fail with "Out of host capacity". A reservation lives in one
+      availability domain, so create one per AD you want nodes in; they are split
+      evenly across them. Spreading is easier to obtain but means any single AD
+      outage takes the cluster down, so prefer one AD when you can get it. Reserved
+      hosts bill from creation whether or not they run. Frozen after the first apply.
     type: string
     required: false
   worker_placement_ads:
     title: Availability domain numbers
     description: >-
-      Comma-separated AD numbers to place workers in, e.g. "2". Empty spreads them
+      Comma-separated AD numbers to place workers in, e.g. "1,2". Empty spreads them
       across all ADs — also the way to steer around an AD that is out of host
-      capacity. Must name the single AD the reservation lives in when one is set.
+      capacity. Leave empty when using capacity reservations: placement then comes
+      from the ADs of the reservations themselves.
     type: string
     required: false
 

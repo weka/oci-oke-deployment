@@ -15,6 +15,8 @@
 #   production_tier         — chosen capacity => worker instance type + node count
 #   node_count              — non-production node count
 #   create_vcn / vcn_id     — VCN topology
+#   capacity_reservation_ids — one worker pool per reservation, so adding or
+#                             removing one adds or destroys a whole pool
 # Left editable after apply: quay_username, quay_password, operator_version.
 # ---------------------------------------------------------------------------
 resource "terraform_data" "input_lock" {
@@ -24,6 +26,8 @@ resource "terraform_data" "input_lock" {
     node_count      = var.node_count
     create_vcn      = var.create_vcn
     vcn_id          = coalesce(var.vcn_id, "none")
+    # Normalised so whitespace or reordering is not read as a change.
+    capacity_reservation_ids = join(",", sort(local.capacity_reservation_ids))
   }
 
   # Written once, on create, and never updated — the frozen baseline.
@@ -55,6 +59,13 @@ resource "terraform_data" "input_guard" {
     precondition {
       condition     = coalesce(var.vcn_id, "none") == terraform_data.input_lock.output.vcn_id
       error_message = "vcn_id is immutable after first apply. Changing the VCN would tear down networking."
+    }
+    # try(): ignore_changes freezes the snapshot's SHAPE too, so a stack created
+    # before this key existed has no such attribute and a bare lookup would error
+    # on every plan. Those stacks predate reservations, so "" is the right value.
+    precondition {
+      condition     = join(",", sort(local.capacity_reservation_ids)) == try(terraform_data.input_lock.output.capacity_reservation_ids, "")
+      error_message = "capacity_reservation_ids is immutable after first apply (locked to '${try(terraform_data.input_lock.output.capacity_reservation_ids, "")}'). Each reservation backs its own worker pool, so changing the set would destroy or replace nodes — deploy a new stack instead."
     }
   }
 }

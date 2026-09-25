@@ -199,10 +199,12 @@ posture today, the public endpoint is hardcoded in `main.tf` rather than exposed
   fails early with guidance. Note it only reports whether the shape is available in an AD, **not
   whether N hosts are free** — the multi-PB options need tens to hundreds of bare-metal hosts, so
   confirm quota/capacity with Oracle before picking one. The only way to *guarantee* the hosts is to
-  reserve them first and set `capacity_reservation_id` (plus `worker_placement_ads` for the
-  reservation's AD); the stack then verifies the reservation covers the node count before building.
-  Otherwise choose a smaller capacity option, pin ADs via `worker_placement_ads`, or try another
-  region/AD. (This is an OCI availability constraint, not a config issue.)
+  reserve them first and set `capacity_reservation_ids` — one reservation per AD, comma-separated,
+  since a reservation lives in a single AD; the stack builds one worker pool per reservation and
+  verifies each holds enough hosts before building. Spreading across ADs is easier to obtain but
+  costs availability — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §6. Otherwise choose a smaller
+  capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
+  availability constraint, not a config issue.)
 - **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
   are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` is
   set from a safe default — revisit it for throughput tuning at the largest capacities.
