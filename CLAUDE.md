@@ -47,7 +47,7 @@ stack with every field left untouched. So for any variable that carries a
 `variables.tf` must be identical.
 
 Currently paired: `operator_version`, `production_tier`, `node_count`,
-`skip_capacity_preflight`, `control_plane_is_public`, `create_vcn`.
+`skip_capacity_preflight`, `create_vcn`.
 
 Change one, change the other in the same commit.
 

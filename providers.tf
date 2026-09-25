@@ -58,7 +58,7 @@ provider "oci" {
 # layer is torn down cleanly BEFORE the cluster. This is what makes teardown work.
 resource "terraform_data" "kube_connect" {
   input = {
-    host = "https://${var.control_plane_is_public ? module.oke.cluster_endpoints.public_endpoint : module.oke.cluster_endpoints.private_endpoint}"
+    host = "https://${module.oke.cluster_endpoints.public_endpoint}"
     # base64 certificate-authority-data (kubeconfig form); decoded in the locals below.
     ca = module.oke.cluster_ca_cert
   }

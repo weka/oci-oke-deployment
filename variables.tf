@@ -108,12 +108,6 @@ variable "cni_type" {
   default     = "npn"
 }
 
-variable "control_plane_is_public" {
-  description = "Give the Kubernetes API endpoint a public IP so kubectl works directly from your laptop."
-  type        = bool
-  default     = true
-}
-
 variable "control_plane_allowed_cidrs" {
   description = "CIDRs allowed to reach the public control plane. The default is open; tighten to your IP for anything real."
   type        = list(string)

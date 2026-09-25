@@ -15,17 +15,15 @@
 #   production_tier         — chosen capacity => worker instance type + node count
 #   node_count              — non-production node count
 #   create_vcn / vcn_id     — VCN topology
-#   control_plane_is_public — public<->private force-replaces the cluster/endpoint
 # Left editable after apply: quay_username, quay_password, operator_version.
 # ---------------------------------------------------------------------------
 resource "terraform_data" "input_lock" {
   input = {
-    flavor                  = var.flavor
-    production_tier         = var.production_tier
-    node_count              = var.node_count
-    create_vcn              = var.create_vcn
-    vcn_id                  = coalesce(var.vcn_id, "none")
-    control_plane_is_public = var.control_plane_is_public
+    flavor          = var.flavor
+    production_tier = var.production_tier
+    node_count      = var.node_count
+    create_vcn      = var.create_vcn
+    vcn_id          = coalesce(var.vcn_id, "none")
   }
 
   # Written once, on create, and never updated — the frozen baseline.
@@ -57,10 +55,6 @@ resource "terraform_data" "input_guard" {
     precondition {
       condition     = coalesce(var.vcn_id, "none") == terraform_data.input_lock.output.vcn_id
       error_message = "vcn_id is immutable after first apply. Changing the VCN would tear down networking."
-    }
-    precondition {
-      condition     = var.control_plane_is_public == terraform_data.input_lock.output.control_plane_is_public
-      error_message = "control_plane_is_public is immutable after first apply (locked to ${terraform_data.input_lock.output.control_plane_is_public}). Flipping public<->private force-replaces the cluster."
     }
   }
 }

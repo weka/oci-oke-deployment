@@ -386,19 +386,22 @@ module "oke" {
   nsgs       = coalesce(var.nsgs, local.default_nsgs)
 
   # Cluster
-  create_cluster              = true
-  cluster_name                = var.cluster_name
-  cluster_type                = local.cluster_type
-  kubernetes_version          = var.kubernetes_version
-  cni_type                    = var.cni_type
-  control_plane_is_public     = var.control_plane_is_public
+  create_cluster     = true
+  cluster_name       = var.cluster_name
+  cluster_type       = local.cluster_type
+  kubernetes_version = var.kubernetes_version
+  cni_type           = var.cni_type
+  # Not a variable: the WEKA layer installs over the Kubernetes API from the ORM
+  # runner, which sits OUTSIDE the VCN. A private endpoint fails late — the whole
+  # cluster builds, then the apply dies at the helm/kubernetes resources.
+  control_plane_is_public     = true
   control_plane_allowed_cidrs = var.control_plane_allowed_cidrs
   # v5.x splits "public endpoint" (subnet placement) from "assign a public IP to
   # the API endpoint"; we need both true so kubectl reaches the cluster directly.
-  assign_public_ip_to_control_plane = var.control_plane_is_public
+  assign_public_ip_to_control_plane = true
 
-  # We drive kubectl/wekakube from the laptop against the public API endpoint,
-  # so the private bastion + operator hosts aren't needed.
+  # Nothing needs in-VCN access: the WEKA layer installs from the runner and
+  # kubectl/wekakube run from a laptop, both against the public endpoint above.
   create_bastion  = false
   create_operator = false
   # IAM: MANAGED node-pools (production) are authorized to join by OKE itself, so

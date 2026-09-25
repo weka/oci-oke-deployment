@@ -93,10 +93,6 @@ variableGroups:
       - production_tier
       - skip_capacity_preflight
 
-  - title: "Kubernetes API"
-    variables:
-      - control_plane_is_public
-
   - title: "Networking"
     variables:
       - create_vcn
@@ -167,16 +163,6 @@ variables:
       tenancy, or you lack permission to read it.
     type: boolean
     default: false
-
-  # --- Kubernetes API ---
-  control_plane_is_public:
-    title: Public API endpoint
-    description: >-
-      Give the Kubernetes API a public IP so kubectl works directly. Frozen after
-      first apply (flipping public/private replaces the cluster). Tighten
-      control_plane_allowed_cidrs for real use.
-    type: boolean
-    default: true
 
   # --- Networking (frozen after first apply) ---
   create_vcn:

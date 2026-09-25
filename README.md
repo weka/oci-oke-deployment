@@ -183,9 +183,10 @@ still **token-authenticated** (short-lived OCI/OKE tokens). This is an accepted,
 
 **Hardening (optional, not implemented here):** for a fully private control plane, install WEKA from
 **inside the VCN** — enable the module's operator host (`create_operator = true`) and run the Helm
-install + `kubectl apply` from it via cloud-init, then set `control_plane_is_public = false`. That
-removes the public endpoint entirely at the cost of an always-on operator VM and dropping the
-in-stack helm/kubectl providers for the WEKA layer.
+install + `kubectl apply` from it via cloud-init, then pass `control_plane_is_public = false` to the
+module. That removes the public endpoint entirely at the cost of an always-on operator VM and
+dropping the in-stack helm/kubectl providers for the WEKA layer. Because that is the only supported
+posture today, the public endpoint is hardcoded in `main.tf` rather than exposed as a stack input.
 
 ## Caveats
 
