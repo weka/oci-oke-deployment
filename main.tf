@@ -306,7 +306,9 @@ locals {
   # merge() layer 2 (placement): optionally pin ADs via placement_ads when
   #   var.worker_placement_ads is set (e.g. to steer DenseIO around out-of-capacity
   #   ADs). Empty => module default (all ADs).
-  # merge() layer 3 (block volume): non-production only — attach a paravirtualized
+  # merge() layer 3 (capacity reservation): launch into reserved hosts instead of
+  #   on demand. capacity.tf gates the AD and host count before anything is built.
+  # merge() layer 4 (block volume): non-production only — attach a paravirtualized
   #   block volume as WEKA drives. Production (DenseIO) has local NVMe presented
   #   automatically by the hypervisor; no block volume is needed or attached.
   # ---------------------------------------------------------------------------
@@ -339,6 +341,9 @@ locals {
       # AD pinning — preserved from the original stack.
       var.worker_placement_ads != "" ? {
         placement_ads = [for n in split(",", var.worker_placement_ads) : tonumber(trimspace(n))]
+      } : {},
+      local.has_capacity_reservation ? {
+        capacity_reservation_id = var.capacity_reservation_id
       } : {},
       # Non-production only: attach a paravirtualized block volume as WEKA drives.
       # Production (DenseIO node-pool) uses local NVMe — no block volume attached.

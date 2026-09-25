@@ -109,7 +109,12 @@ An AD reporting `AVAILABLE` therefore does not mean it has enough hosts, or any:
 three ADs reported `AVAILABLE` both before and two hours after an 8-node E5.128 apply that failed
 on 2 of the 8. Expect to hit this *during* the node-pool build, after the VCN and control plane are
 already up, and to need a `terraform destroy` before retrying.
-Retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
+The only fix that cannot fail for capacity is to reserve the hosts up front: create a compute
+capacity reservation (no minimum term — delete it when you are done, but it bills from creation),
+then set `capacity_reservation_id` and point `worker_placement_ads` at the reservation's AD. The
+stack verifies the reservation is in that AD and holds enough hosts before it builds anything,
+which matters because OCI fills a reservation partially when it is short.
+Otherwise: retry, choose a smaller `production_tier` capacity, pin ADs via `worker_placement_ads`,
 try another region, or use the dev (non-production) zip (Standard shapes, abundant quota).
 
 ## 7. Workers never join because the WEKA tuning part blocked cloud-init (`enable --now`)

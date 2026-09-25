@@ -326,6 +326,18 @@ variable "worker_placement_ads" {
   default     = ""
 }
 
+variable "capacity_reservation_id" {
+  description = <<-EOT
+    OCID of a compute capacity reservation to launch the worker nodes into. Empty
+    (default) launches on demand. Requires worker_placement_ads to name the single
+    AD the reservation lives in.
+    Reserved hosts bill from creation whether or not they run; delete the
+    reservation as well as the stack when you are done with it.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "node_boot_volume_gb" {
   description = "Boot volume size (GB) per worker node."
   type        = number

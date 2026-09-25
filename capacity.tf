@@ -25,7 +25,12 @@
 # ---------------------------------------------------------------------------
 
 locals {
-  capacity_preflight = local.is_production && !var.skip_capacity_preflight
+  has_capacity_reservation = var.capacity_reservation_id != ""
+
+  # A reservation already holds the hosts, so an unreliable OUT_OF_HOST_CAPACITY
+  # reading would block a deploy that cannot fail for capacity. The reservation
+  # gate below replaces this check rather than adding to it.
+  capacity_preflight = local.is_production && !var.skip_capacity_preflight && !local.has_capacity_reservation
 }
 
 # All ADs in the target region (capacity is per-AD).
@@ -100,7 +105,84 @@ resource "terraform_data" "capacity_gate" {
         "Per-AD status: ${join(", ", [for ad, st in local.capacity_status_by_ad : "${ad}=${st}"])}.",
         local.shape_unsupported ?
         "Options: (1) deploy to a region that offers this shape; (2) use the non-production flavor (Standard shapes, block-volume drives); or (3) override node_shape with a DenseIO shape this region does offer." :
-        "Options: (1) try another region; (2) once capacity frees up, pin an AD via worker_placement_ads; (3) use the non-production flavor (block-volume drives, abundant quota); or (4) if you believe this report is wrong, set skip_capacity_preflight = true to bypass this check.",
+        "Options: (1) reserve the hosts up front and set capacity_reservation_id (the only option that cannot fail for capacity); (2) try another region; (3) once capacity frees up, pin an AD via worker_placement_ads; (4) use the non-production flavor (block-volume drives, abundant quota); or (5) if you believe this report is wrong, set skip_capacity_preflight = true to bypass this check.",
+      ])
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Capacity-reservation gate.
+#
+# Setting capacity_reservation_id switches the preflight above off, so these
+# checks are the only capacity verification left. They matter because OCI fills
+# a reservation PARTIALLY when it is short: ask for 8 hosts, get 6, and the node
+# pool fails on the last 2 exactly as it would have without a reservation.
+#
+# The single-AD rule is also enforced upstream for production (node pools), but
+# NOT for the non-production instance-pool path, which has no such precondition
+# (modules/workers/instancepools.tf) and fails at OCI launch instead.
+#
+# Reading the reservation needs the "inspect capacity-reservations" permission;
+# skip_capacity_preflight bypasses these checks along with the report above.
+# ---------------------------------------------------------------------------
+data "oci_core_compute_capacity_reservation" "worker" {
+  count                   = local.verify_reservation ? 1 : 0
+  capacity_reservation_id = var.capacity_reservation_id
+}
+
+locals {
+  verify_reservation = local.has_capacity_reservation && !var.skip_capacity_preflight
+
+  # null when unparseable, so the first precondition reports it instead of the
+  # whole plan dying inside tonumber().
+  placement_ad_number = try(tonumber(trimspace(var.worker_placement_ads)), null)
+
+  reservation = one(data.oci_core_compute_capacity_reservation.worker)
+  # The module derives an AD's number from the last character of its name
+  # (module-iam.tf); match that so the comparison agrees with placement_ads.
+  reservation_ad_number = local.reservation == null ? null : parseint(substr(local.reservation.availability_domain, -1, -1), 10)
+
+  reservation_free_per_config = local.reservation == null ? [] : [
+    for c in local.reservation.instance_reservation_configs :
+    tonumber(c.reserved_count) - tonumber(c.used_count) if c.instance_shape == local.node_shape
+  ]
+  # Zero also covers "the reservation holds a different shape than we launch".
+  reservation_free = length(local.reservation_free_per_config) > 0 ? sum(local.reservation_free_per_config) : 0
+}
+
+resource "terraform_data" "reservation_gate" {
+  count = local.has_capacity_reservation ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition = local.placement_ad_number != null
+      error_message = join(" ", [
+        "capacity_reservation_id requires worker_placement_ads to name exactly one availability domain number,",
+        "but it is \"${var.worker_placement_ads}\".",
+        "Run `oci compute capacity-reservation get --capacity-reservation-id ${var.capacity_reservation_id}`",
+        "and set worker_placement_ads to the trailing number of its availability domain (e.g. \"2\" for ...-AD-2).",
+      ])
+    }
+
+    precondition {
+      condition = local.reservation == null || local.placement_ad_number == null || local.placement_ad_number == local.reservation_ad_number
+      error_message = join(" ", [
+        "worker_placement_ads is \"${var.worker_placement_ads}\" but the reservation lives in",
+        "${try(local.reservation.availability_domain, "?")} (AD ${coalesce(local.reservation_ad_number, 0)}).",
+        "Workers can only draw on a reservation in their own AD — set worker_placement_ads to",
+        "${coalesce(local.reservation_ad_number, 0)}.",
+      ])
+    }
+
+    precondition {
+      condition = local.reservation == null || local.reservation_free >= local.effective_node_count
+      error_message = join(" ", [
+        "The reservation has ${local.reservation_free} free ${local.node_shape} host(s) but this deployment needs",
+        "${local.effective_node_count}. OCI fills a reservation partially when capacity is short, so a request for",
+        "${local.effective_node_count} may have returned fewer — check it with",
+        "`oci compute capacity-reservation get --capacity-reservation-id ${var.capacity_reservation_id}`.",
+        "Grow the reservation, pick a production_tier that fits, or reserve in another AD or region.",
       ])
     }
   }

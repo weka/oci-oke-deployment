@@ -37,7 +37,7 @@ The repo **is** the stack — every `.tf` at the root is part of one Terraform c
 | `providers.tf` | Terraform + `oci` (default + `oci.home`), `helm`, `kubernetes`, `kubectl` providers |
 | `variables.tf` | All inputs (required: `tenancy_id`, `compartment_id`, quay.io creds) |
 | `main.tf` | The `terraform-oci-oke` module block (VCN, cluster, node pool + WEKA node prep) |
-| `capacity.tf` | Preflight that checks DenseIO shape availability per AD before building |
+| `capacity.tf` | Preflights before building: DenseIO shape availability per AD, or the capacity reservation when one is set |
 | `weka_data_network.tf` | Intra-VCN data-plane security list + attach to the worker subnet |
 | `weka.tf` | Operator namespace, pull secrets, `helm_release`, and the WEKA custom resources |
 | `guard.tf` | Lifecycle guards that freeze sizing/network inputs after the first apply |
@@ -198,9 +198,11 @@ posture today, the public endpoint is hardcoded in `main.tf` rather than exposed
   *out-of-host-capacity*. A `capacity.tf` preflight checks every AD before building and
   fails early with guidance. Note it only reports whether the shape is available in an AD, **not
   whether N hosts are free** — the multi-PB options need tens to hundreds of bare-metal hosts, so
-  confirm quota/capacity with Oracle before picking one. If an apply still fails, choose a smaller
-  capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
-  availability constraint, not a config issue.)
+  confirm quota/capacity with Oracle before picking one. The only way to *guarantee* the hosts is to
+  reserve them first and set `capacity_reservation_id` (plus `worker_placement_ads` for the
+  reservation's AD); the stack then verifies the reservation covers the node count before building.
+  Otherwise choose a smaller capacity option, pin ADs via `worker_placement_ads`, or try another
+  region/AD. (This is an OCI availability constraint, not a config issue.)
 - **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
   are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` is
   set from a safe default — revisit it for throughput tuning at the largest capacities.
