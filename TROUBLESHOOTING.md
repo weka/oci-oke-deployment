@@ -118,6 +118,8 @@ than 8 hosts in one AD, which is exactly the spread that failed here. Leave `wor
 empty; placement comes from the reservations. The stack verifies each reservation holds enough
 hosts of the right shape before it builds anything, because OCI fills a reservation partially
 when it is short.
+Reservations also need a one-time tenancy IAM grant before OKE can launch into them — without it
+the apply fails late with a 404 that looks nothing like a permissions problem (§9).
 
 Spreading is a *provisioning* fallback, not a resilience win, and it is not free. WEKA's protection
 level is derived from the node count alone (2 below 21 nodes), and the operator has no concept of
@@ -190,6 +192,78 @@ oci iam policy create --compartment-id "$WORKER_COMPARTMENT" --name oke-workers-
   --statements "[\"Allow dynamic-group oke-workers-fix to {CLUSTER_JOIN} in compartment id $WORKER_COMPARTMENT where target.cluster.id = '$CLUSTER_ID'\"]"
 # then terminate the pool's instances; the pool relaunches them and they authorize + join
 ```
+
+---
+
+## 9. Node pool fails on `GetComputeCapacityReservation (404, NotAuthorizedOrNotFound)`
+
+**Symptom:** with `capacity_reservation_ids` set, the apply builds the VCN and the control plane
+normally and then, ~7 minutes in, the node pool fails:
+
+```
+Error: Work Request error
+Service: Containerengine Node Pool
+Message: 8 node(s) launch failure. Reason for failure on one of the nodes :
+  Error returned by GetComputeCapacityReservation operation in Compute service.
+  (404, NotAuthorizedOrNotFound)
+```
+
+**Root cause:** a missing tenancy-level IAM grant, not a missing or exhausted reservation. OCI
+returns 404 for "not authorized" exactly as it does for "not found". The reservation can be `ACTIVE`,
+in the right AD, in the same compartment as the node pool, and hold every host — and this still
+fails, because the call is made by the **node-pool principal**, not by the deploying user.
+
+Nothing earlier in the apply catches it. `data.oci_core_compute_capacity_reservation.worker`
+(capacity.tf) reads the same reservation successfully seconds before, since that read runs as *your*
+credentials — so `reservation_gate` passes on real data and the plan looks clean.
+
+**Fix — one policy, once per tenancy.** Both statements are required and grant to different
+principals: the service orchestrates, the node-pool principal makes the actual API call. Both must be
+scoped `in tenancy`; OCI does not accept a compartment scope for them
+([OCI docs](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengmakingcapacityreservations.htm)).
+IAM is an identity resource, so the write goes to the **home region** regardless of where you deploy:
+
+```bash
+HOME_REGION=$(oci iam region-subscription list \
+  --query "data[?\"is-home-region\"]|[0].\"region-name\"" --raw-output)
+TENANCY=$(awk -F= '/^tenancy[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' ~/.oci/config)
+
+cat > /tmp/oke-cr.json <<'JSON'
+["Allow service oke to use compute-capacity-reservations in tenancy",
+ "Allow any-user to use compute-capacity-reservations in tenancy where request.principal.type = 'nodepool'"]
+JSON
+
+oci iam policy create --region "$HOME_REGION" --compartment-id "$TENANCY" \
+  --name oke-capacity-reservations \
+  --description "Lets OKE launch managed nodes into compute capacity reservations" \
+  --statements file:///tmp/oke-cr.json
+```
+
+Allow 2–5 minutes for IAM propagation, then `terraform destroy` (or `make destroy`) and re-apply —
+the failed work request leaves the cluster and VCN behind but no usable nodes. The reservation
+survives and is reused, so you do not pay for a second set of hosts.
+
+A tenancy-wide `Deny ... compute-capacity-reservations` scoped to
+`request.principal.type = 'user'` does **not** conflict with this: it constrains user principals,
+while these grants target the service and node-pool principals.
+
+**Why the stack does not create this policy.** Every other policy it writes is compartment-scoped
+(see `iam_weka.tf`); these two must live in the tenancy root, which would make tenancy-level policy
+admin a requirement of every deploy. `scripts/reserve-deploy.sh` checks for the grant instead,
+before it creates any reservation.
+
+**The stack still has no check of its own — this is a gap, not a decision.** The guard lives in
+`scripts/`, which the Makefile's `zip` target deletes from the published stack, so a Console
+customer who sets `capacity_reservation_ids` gets no warning and learns about the grant from the
+404. The intended home is a Terraform `check` block in `capacity.tf`, gated on
+`local.has_capacity_reservation`, wrapping a scoped `data "oci_identity_policies"` at the tenancy
+root: a `check` block reports a failed assertion as a *warning* and
+[masks a nested data source's provider errors as warnings too](https://developer.hashicorp.com/terraform/language/block/check),
+so a tenancy that refuses `inspect policies in tenancy` degrades exactly the way the script's
+unreadable-policies path does. That needs `required_version >= 1.5.0` in `providers.tf` (currently
+`>= 1.4.0`; ORM already runs 1.5.x). The precedent is already here — `oci_core_compute_capacity_report`
+requires tenancy-root `inspect compute-capacity-reports` and `capacity.tf` documents that a tenancy
+without it fails on the report itself.
 
 ---
 

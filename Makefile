@@ -120,6 +120,7 @@ zip: ## Build build/oke-weka-$(VARIANT).zip from the current tree
 	# The zip must carry exactly one schema.yaml; the variants are the source of truth.
 	cp schema-$(VARIANT).yaml $(STAGE)/schema.yaml
 	rm -f $(STAGE)/schema-prod.yaml $(STAGE)/schema-dev.yaml $(STAGE)/Makefile $(STAGE)/TESTING.md
+	rm -rf $(STAGE)/scripts
 	# Pin the flavor in TERRAFORM, not just the schema: ORM submits no value for a
 	# `visible: false` variable, so a schema default never reaches Terraform and a
 	# dev zip would fall back to variables.tf's default (production) — building
@@ -136,6 +137,8 @@ zip: ## Build build/oke-weka-$(VARIANT).zip from the current tree
 	@echo "built $(ZIP) ($$(du -h $(ZIP) | cut -f1)) — $$(unzip -l $(ZIP) | tail -1)"
 	@unzip -l $(ZIP) | grep -qE ' schema\.yaml$$' || { echo "ERROR: schema.yaml missing from zip"; exit 1; }
 	@unzip -l $(ZIP) | grep -qE 'crds/.*\.yaml$$' || { echo "ERROR: crds/ missing from zip"; exit 1; }
+	@! unzip -l $(ZIP) | grep -qE ' (Makefile|TESTING\.md)$$|scripts/' \
+	  || { echo "ERROR: dev tooling leaked into $(ZIP)"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # ORM lifecycle.
@@ -183,6 +186,14 @@ NODES ?=
 # Unlike TIER this is NOT frozen by guard.tf, so it can be changed on a re-apply.
 OPERATOR_VERSION ?=
 
+# Comma-separated capacity reservation OCIDs -> capacity_reservation_ids. Empty
+# launches on demand. Frozen by guard.tf after the first apply, like TIER.
+#
+# worker_placement_ads is deliberately never sent alongside this: the stack's
+# reservation_gate precondition requires it empty, because placement comes from
+# the reservations' own ADs. scripts/reserve-deploy.sh fills this in.
+RESERVATIONS ?=
+
 vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASSWORD ## Write build/vars.json (stack inputs)
 	@mkdir -p $(BUILD)
 	@test -n "$(SSH_PUBLIC_KEY_FILE)" -a -f "$(SSH_PUBLIC_KEY_FILE)" || { \
@@ -197,7 +208,7 @@ vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASS
 	 fi; \
 	 test -n "$$tenancy" || { echo "ERROR: could not determine the tenancy OCID — pass TENANCY_ID=ocid1.tenancy..."; exit 1; }; \
 	 TENANCY="$$tenancy" COMPARTMENT='$(COMPARTMENT_ID)' REGION_V='$(REGION)' TIER='$(TIER)' \
-	 OPVER='$(OPERATOR_VERSION)' NODES='$(NODES)' \
+	 OPVER='$(OPERATOR_VERSION)' NODES='$(NODES)' RESV='$(RESERVATIONS)' \
 	 QUAY_USERNAME='$(QUAY_USERNAME)' QUAY_PASSWORD='$(QUAY_PASSWORD)' \
 	 SSH_KEY_FILE='$(SSH_PUBLIC_KEY_FILE)' python3 -c 'import json,os; \
 	d={ \
@@ -210,9 +221,10 @@ vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASS
 	d.update({"production_tier": os.environ["TIER"]} if os.environ.get("TIER") else {}); \
 	d.update({"production_node_count": os.environ["NODES"]} if os.environ.get("NODES") else {}); \
 	d.update({"operator_version": os.environ["OPVER"]} if os.environ.get("OPVER") else {}); \
+	d.update({"capacity_reservation_ids": os.environ["RESV"]} if os.environ.get("RESV") else {}); \
 	print(json.dumps(d))' > $(BUILD)/vars.json; \
 	 chmod 600 $(BUILD)/vars.json; \
-	 echo "wrote $(BUILD)/vars.json (tenancy $$tenancy$(if $(TIER), / tier: $(TIER),)$(if $(NODES), / nodes: $(NODES),)$(if $(OPERATOR_VERSION), / operator: $(OPERATOR_VERSION),))"
+	 echo "wrote $(BUILD)/vars.json (tenancy $$tenancy$(if $(TIER), / tier: $(TIER),)$(if $(NODES), / nodes: $(NODES),)$(if $(OPERATOR_VERSION), / operator: $(OPERATOR_VERSION),)$(if $(RESERVATIONS), / reservations: $(RESERVATIONS),))"
 
 stack-create: zip vars-json ## Create an ORM stack from the current tree
 	@id=$$(oci resource-manager stack create $(OCI_ARGS) \
@@ -310,6 +322,11 @@ local-destroy: guard-CONFIRM ## terraform destroy (CONFIRM=yes)
 
 clean: ## Remove build artifacts (keeps stack ids)
 	rm -rf $(BUILD)/stage-* $(BUILD)/*.zip $(BUILD)/vars.json
+
+# Let scripts/ read a knob instead of re-deriving it. Asking make is immune to
+# the ifeq branches and command-line overrides that scraping the file is not.
+print-%:
+	@echo '$($*)'
 
 guard-%:
 	@if [ -z "$($*)" ]; then \

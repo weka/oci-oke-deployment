@@ -119,7 +119,73 @@ make stack-create VARIANT=prod TIER='955 TB usable - 16 x BM.DenseIO.E5.128 (12 
 changing either needs a **new** stack. `production_node_count` is deliberately *not*
 frozen — changing it on a live stack will destroy and replace workers.
 
+## Reserving the hosts first
+
+The escalation when capacity is short. Reserving up front is the only path that *cannot*
+fail with `Out of host capacity` — see TROUBLESHOOTING.md §6 for the tradeoffs, especially
+what spreading across ADs costs you.
+
+**One-time tenancy setup.** A tenancy admin must grant OKE permission to launch into
+reservations before the first reserved deploy, or the apply dies ~7 min in with a 404 that
+reads like a missing reservation (TROUBLESHOOTING.md §9 has the two statements and the
+command). `reserve-deploy.sh` checks for the grant before it creates anything.
+
+`scripts/reserve-deploy.sh` does the whole run: it derives the shape and worker count from
+the tier, creates (or reuses) one reservation per AD, drives `make stack-create`/`apply`
+with `RESERVATIONS` set, then tracks WEKA to Ready.
+
+```bash
+export QUAY_USERNAME=... QUAY_PASSWORD=...
+scripts/reserve-deploy.sh deploy -c "$COMPARTMENT_ID" -r eu-frankfurt-1 --dry-run
+scripts/reserve-deploy.sh deploy -c "$COMPARTMENT_ID" -r eu-frankfurt-1
+```
+
+`--dry-run` prints every `oci` and `make` command without running any of them, and works
+without credentials. `--ads 1,2,3` spreads when one AD cannot supply the hosts; `--nodes`
+and `--tier` behave exactly as the `make` knobs of the same name.
+
+Reservations bill from creation whether or not the nodes run, so clean up with:
+
+```bash
+scripts/reserve-deploy.sh teardown -c "$COMPARTMENT_ID" -r eu-frankfurt-1 --confirm
+```
+
+That destroys the stack and deletes every reservation tagged `oke-weka-reserve=<stack-name>`.
+Reservations made by hand in the Console carry no such tag and are left alone.
+
+To pass reservations you created yourself, skip the script and use the knob directly:
+
+```bash
+make stack-create plan apply VARIANT=prod CONFIRM=yes \
+  RESERVATIONS=ocid1.capacityreservation...,ocid1.capacityreservation...
+```
+
+**Give every reservation the same host count when you do this.** `capacity.tf` spreads
+nodes unevenly (8 over 3 ADs → 3/3/2) and then pairs a size to a reservation by OCID sort
+order, which is unrelated to which AD holds what — so a 3/3/2 *set* is rejected by
+`reservation_gate` in two of the three possible orderings, even though it holds exactly
+the 8 hosts needed. Reserving `ceil(nodes / ADs)` everywhere sidesteps it, which is what
+`reserve-deploy.sh` does. The real fix is for `capacity.tf` to pair sizes to reservations
+by reserved count descending; that changes pool sizes on stacks whose
+`capacity_reservation_ids` is already frozen, so it replaces workers and needs its own
+change.
+
+Leave `worker_placement_ads` empty either way — the stack takes placement from the
+reservations' own ADs and its `reservation_gate` rejects setting both.
+
 ## Verifying a deploy
+
+A SUCCEEDED apply does **not** mean WEKA is up: `kubectl_manifest.weka_cr` only *applies*
+the CRs, so the job finishes with `wekacluster` still `Init`. Expect a further 10–25 min.
+`scripts/wait-ready.sh` waits that out and exits 0 only when the cluster is usable:
+
+```bash
+KUBECONFIG=~/kube-weka.yaml EXPECTED_NODES=8 scripts/wait-ready.sh
+```
+
+It walks nodes → operator → policies → containers → `wekacluster Ready` →
+`wekaclient Running`, printing the Active/Created/Desired counts as it goes, and dumps
+diagnostics on timeout. `reserve-deploy.sh` calls it for you. Manually:
 
 ```bash
 make outputs VARIANT=dev     # stack outputs, incl. the ready-to-run kubeconfig command

@@ -341,26 +341,33 @@ locals {
   # One pool per capacity reservation (each reservation lives in a single AD and
   # the module allows only one AD per pool), otherwise a single pool over the ADs
   # named by worker_placement_ads — or all of them when it is empty.
+  #
+  # merge(), not `? :`: the two shapes differ in both pool name and attributes,
+  # which no conditional can unify. `terraform validate` passes either way — this
+  # only fails at plan.
   # ---------------------------------------------------------------------------
-  worker_pools = local.has_capacity_reservation ? {
-    for p in local.reservation_pools : "${var.node_pool_name}-ad${p.ad_number}" => merge(
-      local.worker_pool_base,
-      {
-        size                    = p.size
-        placement_ads           = [p.ad_number]
-        capacity_reservation_id = p.reservation_id
-      }
-    )
-    } : {
-    (var.node_pool_name) = merge(
-      local.worker_pool_base,
-      { size = local.effective_node_count },
-      # AD pinning — preserved from the original stack.
-      var.worker_placement_ads != "" ? {
-        placement_ads = [for n in split(",", var.worker_placement_ads) : tonumber(trimspace(n))]
-      } : {},
-    )
-  }
+  worker_pools = merge(
+    {
+      for p in local.reservation_pools : "${var.node_pool_name}-ad${p.ad_number}" => merge(
+        local.worker_pool_base,
+        {
+          size                    = p.size
+          placement_ads           = [p.ad_number]
+          capacity_reservation_id = p.reservation_id
+        }
+      )
+    },
+    local.has_capacity_reservation ? {} : {
+      (var.node_pool_name) = merge(
+        local.worker_pool_base,
+        { size = local.effective_node_count },
+        # AD pinning — preserved from the original stack.
+        var.worker_placement_ads != "" ? {
+          placement_ads = [for n in split(",", var.worker_placement_ads) : tonumber(trimspace(n))]
+        } : {},
+      )
+    }
+  )
 }
 
 module "oke" {

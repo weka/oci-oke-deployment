@@ -127,6 +127,14 @@ resource "terraform_data" "capacity_gate" {
 # The lookup is NOT gated on skip_capacity_preflight: its availability_domain
 # decides where each pool is placed, so the build needs it either way. Only the
 # host-count precondition honours that bypass.
+#
+# THIS GATE DOES NOT COVER THE FAILURE THAT ACTUALLY KILLS RESERVED APPLIES.
+# OKE launches nodes under the node-pool principal, which needs a separate
+# TENANCY-level grant on compute-capacity-reservations. Nothing here can see
+# that: the data source below runs as the DEPLOYING user, succeeds, and the
+# preconditions then pass on real data — while the node pool dies ~7 minutes
+# later with a 404 (NotAuthorizedOrNotFound) that names the reservation and
+# reads like it is missing. TROUBLESHOOTING.md §9.
 # ---------------------------------------------------------------------------
 data "oci_core_compute_capacity_reservation" "worker" {
   for_each                = toset(local.capacity_reservation_ids)

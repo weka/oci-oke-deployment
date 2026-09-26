@@ -204,7 +204,9 @@ posture today, the public endpoint is hardcoded in `main.tf` rather than exposed
   verifies each holds enough hosts before building. Spreading across ADs is easier to obtain but
   costs availability — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §6. Otherwise choose a smaller
   capacity option, pin ADs via `worker_placement_ads`, or try another region/AD. (This is an OCI
-  availability constraint, not a config issue.)
+  availability constraint, not a config issue.) **Reservations have a prerequisite the stack cannot
+  satisfy for you:** a one-time tenancy-level IAM grant letting OKE launch into them, without which
+  the apply fails ~7 min in — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §9.
 - **Bare metal:** the module omits `shape_config` for non-Flex shapes automatically, so OCPU/memory
   are shape-fixed (128 cores); provisioning takes longer (bare-metal first boot). `driveCores` is
   set from a safe default — revisit it for throughput tuning at the largest capacities.

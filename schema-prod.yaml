@@ -181,6 +181,11 @@ variables:
       evenly across them. Spreading is easier to obtain but means any single AD
       outage takes the cluster down, so prefer one AD when you can get it. Reserved
       hosts bill from creation whether or not they run. Frozen after the first apply.
+      REQUIRES a one-time tenancy policy letting OKE launch into reservations ("Allow
+      service oke to use compute-capacity-reservations in tenancy" plus the matching
+      request.principal.type = 'nodepool' grant); without it the apply builds the VCN
+      and control plane and only then fails with a 404 on the reservation. See
+      TROUBLESHOOTING.md section 9.
     type: string
     required: false
   worker_placement_ads:
