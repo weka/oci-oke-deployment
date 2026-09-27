@@ -450,7 +450,7 @@ do_teardown() {
     found=1
     echo "  $id ($ad)"
     run oci compute capacity-reservation delete "${OCI_ARGS[@]}" \
-      --capacity-reservation-id "$id" --force --wait-for-state DELETED
+      --capacity-reservation-id "$id" --force --wait-for-state SUCCEEDED
   done < <(jq -r '.[] | "\(.id) \(.ad)"' <<<"$OWNED_JSON")
   [ "$found" = 0 ] && echo "  none found"
   say "Done"
