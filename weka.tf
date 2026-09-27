@@ -198,6 +198,14 @@ resource "helm_release" "weka_operator" {
   set = [{
     name  = "cleanupRemovedNodes"
     value = "true"
+    }, {
+    # Global default for the operator's pod execs; the chart ships 5m. Raised
+    # because a timed-out exec surfaces only as "Exec failed to stream: context
+    # deadline exceeded", leaving the containers in STEM mode while the step
+    # retries. Must stay under the chart's reconcileTimeout (30m), which bounds
+    # the whole reconcile and is not pinned here.
+    name  = "kubeExecTimeout"
+    value = "20m"
   }]
 
   # Chart-bundled CRDs install automatically; wait=true blocks until the release
