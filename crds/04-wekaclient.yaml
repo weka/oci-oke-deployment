@@ -11,6 +11,11 @@ spec:
   targetCluster:
     name: dev
     namespace: default
+  # Client pods write traces to the same boot volume as the backends; see the
+  # traces note in weka.tf.
+  tracesConfiguration:
+    maxCapacityPerIoNode: ${traces_max_capacity_per_io_node}
+    ensureFreeSpace: ${traces_free_space_gb}
 %{ if length(network_subnets) > 0 ~}
   # MUST match the WekaCluster's network block (03-wekacluster.yaml). Without it
   # the client falls back to the virtual-function path and requests the extended

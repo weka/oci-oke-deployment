@@ -41,7 +41,26 @@ locals {
     # Data plane. An EMPTY list omits the whole network block from the CR (both
     # templates guard on it), which is the non-bare-metal default.
     network_subnets = local.weka_network_subnets
+
+    traces_free_space_gb            = local.weka_traces_free_space_gb
+    traces_max_capacity_per_io_node = local.weka_traces_max_capacity_per_io_node
   }
+
+  # WEKA traces live under /opt/k8s-weka on the boot volume, which on the bare-metal
+  # flavor is the only storage not handed to WEKA as a drive (sign-drives takes
+  # all-not-root). Two things have to hold at once:
+  #
+  #   maxCapacityPerIoNode is multiplied by (cores + 1) PER CONTAINER, so the
+  #   operator default of 10 GB becomes ~70 GB per container on a 128-OCPU node —
+  #   two containers then exceed a 200 GB boot volume on their own.
+  #
+  #   ensureFreeSpace is an absolute GB floor, while kubelet evicts at
+  #   imagefs.available < 15%. A fixed floor therefore sits BELOW the eviction line
+  #   and sinks further as the volume grows, so WEKA fills the disk until kubelet
+  #   declares DiskPressure and evicts every pod on the node. Deriving it from the
+  #   volume keeps the floor above the threshold at any size.
+  weka_traces_free_space_gb            = ceil(var.node_boot_volume_gb * 0.25)
+  weka_traces_max_capacity_per_io_node = 2
 
   # ---------------------------------------------------------------------------
   # Data-plane path: bare metal vs VM.
@@ -199,8 +218,6 @@ resource "helm_release" "weka_operator" {
 resource "kubectl_manifest" "weka_cr" {
   for_each = local.weka_cr_files
 
-  # templatefile renders the sizing placeholders in 03-wekacluster.yaml; the other
-  # CRs contain no ${...} placeholders, so they pass through unchanged.
   yaml_body = templatefile("${path.module}/crds/${each.value}", local.weka_cr_vars)
 
   depends_on = [helm_release.weka_operator, kubernetes_secret_v1.quay]

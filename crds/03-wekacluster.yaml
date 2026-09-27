@@ -21,6 +21,10 @@ spec:
   redundancyLevel: ${redundancy_level}
   stripeWidth: ${stripe_width}
   template: dynamic
+  # See the traces note in weka.tf.
+  tracesConfiguration:
+    maxCapacityPerIoNode: ${traces_max_capacity_per_io_node}
+    ensureFreeSpace: ${traces_free_space_gb}
 %{ if length(network_subnets) > 0 ~}
   # Bare metal: the data NICs are already attached, so WEKA picks the matching NIC
   # per node from the data-path subnet and ensure-nics is not applied (see weka.tf).
