@@ -51,10 +51,12 @@ CLUSTER_OK=Ready
 CLIENT_OK=Running
 CONTAINER_OK='^(Running|Completed)$'
 
-# Only states that never recover. Degraded/Unhealthy are deliberately absent:
-# both show up transiently while a cluster forms, and a false early exit costs
-# more than waiting out the timeout.
-CONTAINER_FATAL='^Error$'
+# There is deliberately NO container-fatal pattern: WekaContainer has no terminal
+# status. The operator sets Error from a generic on-failure callback, still counts
+# the container as operational, uses Error itself as the trigger for a repair step,
+# and requeues every 10s. Error is a retry signal, not a verdict, so gating on it
+# aborts precisely while the operator is healing itself. The overall timeout is the
+# backstop and dumps the same diagnostics.
 POLICY_FATAL='^Failed$'
 
 fatal_seen=""
@@ -126,14 +128,12 @@ policies_done() {
 # $3 is the container's owning cluster; adhoc rows are one-shot helper containers
 # that legitimately come and go and must not gate readiness.
 containers_running() {
-  local rows real bad
+  local rows real
   rows=$(kubectl get wekacontainers -n "$CLUSTER_NS" --no-headers 2>/dev/null)
   [ -n "$rows" ] || { echo "   no wekacontainers yet (operator has not built the cluster)"; return 1; }
   awk '{printf "     %-44s %s\n", $1, $2}' <<<"$rows"
   real=$(printf '%s\n' "$rows" | awk 'NF && $3 !~ /adhoc/ {print $2}')
   [ -n "$real" ] || return 1
-  bad=$(printf '%s\n' "$real" | grep -E "$CONTAINER_FATAL")
-  [ -n "$bad" ] && { fatal_seen="wekacontainer matching $CONTAINER_FATAL"; return 1; }
   ! printf '%s\n' "$real" | grep -vqE "$CONTAINER_OK"
 }
 
