@@ -180,6 +180,19 @@ locals {
   #     never joins (0 nodes -> operator Pending -> `helm ... context deadline
   #     exceeded`). `start --no-block` enqueues the start and returns immediately;
   #     systemd then runs the oneshot in the background, still ordered After=kubelet.
+  #
+  #   - a second systemd ONESHOT for the NVIDIA NIC PCI firmware knobs
+  #     (ADVANCED_PCI_SETTINGS, PCI_WR_ORDERING) that WEKA's
+  #     NicPciSettingsMisconfigured alert checks. Same `start --no-block` rule as
+  #     above, plus After=cloud-final.service, because it can end in a reboot:
+  #     mstconfig only stages firmware NVRAM and the card reads it on a power
+  #     cycle. Rebooting before cloud-final finishes would mark the instance as
+  #     already-run, silently skipping whatever runcmd items had not executed.
+  #     mstfwreset would apply it in place with no reboot, but the node's own
+  #     VNICs ride these cards, so resetting them drops the network out from
+  #     under kubelet and the WEKA pods. Only new nodes run cloud-init, so the
+  #     reboot always lands on a node holding no WEKA data — true on a fresh
+  #     deploy and on a scale-out into a live cluster alike.
   # ---------------------------------------------------------------------------
   # Reboot-persistent hugepage reservation. systemd-sysctl.service re-applies
   # /etc/sysctl.d/* on every boot, so the node comes back with the reservation
@@ -252,12 +265,79 @@ locals {
     WantedBy=multi-user.target
   UNIT
 
+  weka_nic_tuning_script = <<-SCRIPT
+    #!/bin/bash
+    set -u
+
+    STAMP=/var/lib/weka-nic-tuning.rebooted
+
+    # The OKE Oracle Linux image does not ship MFT. mstflint is the open-source
+    # build and carries mstconfig; mft is NVIDIA's. Either is enough, and a node
+    # that can reach neither is left alone rather than failed.
+    if ! command -v mstconfig >/dev/null 2>&1; then
+      dnf -y install mstflint >/dev/null 2>&1 || dnf -y install mft >/dev/null 2>&1
+    fi
+    if ! command -v mstconfig >/dev/null 2>&1; then
+      logger -t weka-nic-tuning "mstconfig unavailable and mstflint/mft not installable; NIC PCI tuning skipped"
+      exit 0
+    fi
+
+    changed=0
+    # ADVANCED_PCI_SETTINGS is card-wide but PCI_WR_ORDERING is per-port, so this
+    # has to walk every mlx5 function rather than tune one address.
+    for dev in /sys/bus/pci/drivers/mlx5_core/0000:*; do
+      [ -e "$dev/vendor" ] || continue
+      pci=$(basename "$dev")
+      # WEKA's check reads a setting as enabled when its line contains "(1)".
+      q=$(mstconfig -d "$pci" query 2>/dev/null)
+      if printf '%s\n' "$q" | grep -q 'ADVANCED_PCI_SETTINGS.*(1)' &&
+         printf '%s\n' "$q" | grep -q 'PCI_WR_ORDERING.*(1)'; then
+        continue
+      fi
+      if mstconfig -y -d "$pci" set ADVANCED_PCI_SETTINGS=1 PCI_WR_ORDERING=1 >/dev/null 2>&1; then
+        logger -t weka-nic-tuning "staged ADVANCED_PCI_SETTINGS=1 PCI_WR_ORDERING=1 on $pci"
+        changed=1
+      else
+        logger -t weka-nic-tuning "WARNING: mstconfig set failed on $pci; firmware left untouched"
+      fi
+    done
+
+    [ "$changed" = 1 ] || exit 0
+
+    # Stamp BEFORE rebooting. If the power cycle does not actually take — OCI
+    # locking the NVRAM, say — the query above stays unsatisfied forever, and an
+    # unstamped run would schedule another reboot on every boot.
+    if [ -e "$STAMP" ]; then
+      logger -t weka-nic-tuning "settings still unapplied after an earlier reboot; not rebooting again"
+      exit 0
+    fi
+    touch "$STAMP"
+    logger -t weka-nic-tuning "rebooting once to apply NIC firmware settings"
+    # Detached: calling `systemctl reboot` from inside the oneshot would deadlock
+    # on its own job.
+    systemd-run --on-active=10s --unit=weka-nic-tuning-reboot systemctl reboot
+  SCRIPT
+
+  weka_nic_tuning_unit = <<-UNIT
+    [Unit]
+    Description=WEKA NIC PCI firmware tuning (ADVANCED_PCI_SETTINGS, PCI_WR_ORDERING)
+    After=cloud-final.service weka-cpu-tuning.service
+    [Service]
+    Type=oneshot
+    RemainAfterExit=true
+    ExecStart=/usr/local/sbin/weka-nic-tuning.sh
+    [Install]
+    WantedBy=multi-user.target
+  UNIT
+
   # Delivered as cloud-config so Terraform/jsonencode handle all escaping.
   worker_cloud_init = jsonencode({
     write_files = [
       { path = "/usr/local/sbin/weka-cpu-tuning.sh", permissions = "0755", owner = "root:root", content = local.weka_cpu_tuning_script },
       { path = "/etc/systemd/system/weka-cpu-tuning.service", permissions = "0644", owner = "root:root", content = local.weka_cpu_tuning_unit },
       { path = "/etc/sysctl.d/99-weka-hugepages.conf", permissions = "0644", owner = "root:root", content = local.weka_hugepages_sysctl },
+      { path = "/usr/local/sbin/weka-nic-tuning.sh", permissions = "0755", owner = "root:root", content = local.weka_nic_tuning_script },
+      { path = "/etc/systemd/system/weka-nic-tuning.service", permissions = "0644", owner = "root:root", content = local.weka_nic_tuning_unit },
     ]
     runcmd = [
       # Apply the drop-in now (it is what systemd-sysctl re-applies on every boot).
@@ -269,6 +349,8 @@ locals {
       # starves the module's oke-init.service, so workers never join (see above).
       "systemctl enable weka-cpu-tuning.service",
       "systemctl start --no-block weka-cpu-tuning.service",
+      "systemctl enable weka-nic-tuning.service",
+      "systemctl start --no-block weka-nic-tuning.service",
     ]
   })
 
