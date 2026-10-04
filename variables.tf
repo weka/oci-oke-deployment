@@ -422,7 +422,7 @@ variable "quay_password" {
 variable "operator_version" {
   description = "WEKA operator Helm chart version."
   type        = string
-  default     = "v1.16.1"
+  default     = "v1.16.3"
 }
 
 # ---------------------------------------------------------------------------
