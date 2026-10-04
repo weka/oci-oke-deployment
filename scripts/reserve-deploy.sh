@@ -14,6 +14,7 @@
 #
 # Usage:
 #   scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> [flags]
+#   scripts/reserve-deploy.sh probe    -c <compartment-ocid> -r <region> [flags]
 #   scripts/reserve-deploy.sh teardown -c <compartment-ocid> -r <region> --confirm
 #
 # Needs QUAY_USERNAME / QUAY_PASSWORD in the environment (the Makefile guards on
@@ -29,7 +30,7 @@ COMPARTMENT_ID=${COMPARTMENT_ID:-}
 TIER=""
 NODES=""
 OPERATOR_VERSION=${OPERATOR_VERSION:-}
-ADS="1"
+ADS=""
 STACK_NAME=${STACK_NAME:-weka-oke-test}
 DRY_RUN=0
 CONFIRM=0
@@ -46,9 +47,14 @@ usable WEKA cluster. Reserving up front is the only way a production apply
 cannot fail with "Out of host capacity" (TROUBLESHOOTING.md §6).
 
   scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> [flags]
+  scripts/reserve-deploy.sh probe    -c <compartment-ocid> -r <region> [flags]
   scripts/reserve-deploy.sh teardown -c <compartment-ocid> -r <region> --confirm
 
-QUAY_USERNAME and QUAY_PASSWORD must be set. OCI_PROFILE and
+probe measures how many hosts each AD will actually give, by reserving and
+immediately releasing. It leaves nothing behind and needs no Quay credentials.
+Use it to pick --ads and --nodes before committing to a deploy.
+
+QUAY_USERNAME and QUAY_PASSWORD must be set for deploy. OCI_PROFILE and
 SSH_PUBLIC_KEY_FILE are passed through to make when set.
 
 Flags:
@@ -58,7 +64,8 @@ Flags:
       --nodes N               Override the worker count the tier implies.
       --operator-version V    WEKA operator chart version, e.g. v1.16.3.
                               Defaults to the stack's own default.
-      --ads N[,N...]          AD numbers to reserve in (default: 1).
+      --ads N[,N...]          AD numbers to reserve in (default: 1; probe
+                              defaults to every AD in the region).
       --stack-name NAME       ORM stack display name (default: weka-oke-test).
       --skip-ready            Stop after apply; do not track WEKA readiness.
       --dry-run               Print every oci/make command without running it.
@@ -81,7 +88,7 @@ run() {
 # --- arguments -------------------------------------------------------------
 
 case "${1:-}" in
-  deploy|teardown) ACTION=$1; shift ;;
+  deploy|probe|teardown) ACTION=$1; shift ;;
   -h|--help) usage; exit 0 ;;
 esac
 
@@ -141,7 +148,7 @@ parse_tier "$TIER"
 NODE_COUNT=${NODES:-$TIER_COUNT}
 [[ $NODE_COUNT =~ ^[0-9]+$ ]] && [ "$NODE_COUNT" -gt 0 ] || die "--nodes must be a positive integer"
 
-IFS=',' read -r -a AD_NUMS <<<"$ADS"
+IFS=',' read -r -a AD_NUMS <<<"${ADS:-1}"
 POOLS=${#AD_NUMS[@]}
 for n in "${AD_NUMS[@]}"; do
   [[ $n =~ ^[0-9]+$ ]] || die "--ads takes AD numbers, e.g. --ads 1,2 (got '$n')"
@@ -162,7 +169,9 @@ done
 # reserved count descending. That changes pool sizes on stacks whose
 # capacity_reservation_ids guard.tf has already frozen, so it replaces workers
 # and needs its own change.
-RESERVE_EACH=$(( (NODE_COUNT + POOLS - 1) / POOLS ))
+reserve_each() { echo $(( ($1 + $2 - 1) / $2 )); }
+
+RESERVE_EACH=$(reserve_each "$NODE_COUNT" "$POOLS")
 RESERVE_EXTRA=$(( RESERVE_EACH * POOLS - NODE_COUNT ))
 
 # --- reservations ----------------------------------------------------------
@@ -172,11 +181,28 @@ RESERVE_EXTRA=$(( RESERVE_EACH * POOLS - NODE_COUNT ))
 AD_NAMES_JSON='[]'
 OWNED_JSON='[]'
 
-load_inventory() {
+# reserved-count, NOT reserved minus used: once this stack's own nodes launch
+# they become the used count, so a free-host check would pass on create and fail
+# every re-apply. Mirrors local.reservation_details in capacity.tf.
+reserved_count_for_shape() {
+  jq -r --arg shape "$TIER_SHAPE" '
+      [ (."instance-reservation-configs" // [])[]
+        | select(."instance-shape" == $shape) | ."reserved-count" ] | add // 0' <<<"$1"
+}
+
+load_ad_names() {
   local raw
   raw=$(oci iam availability-domain list "${OCI_ARGS[@]}" -c "$COMPARTMENT_ID" \
           --query 'data[].name' 2>/dev/null) || raw=""
-  [ -n "$raw" ] && AD_NAMES_JSON=$raw
+  if [ -n "$raw" ]; then AD_NAMES_JSON=$raw; fi
+}
+
+# Kept separate from load_ad_names because probe never reads OWNED_JSON: folding
+# the two together makes every probe pay a list plus one get per existing
+# reservation before it can measure anything.
+load_inventory() {
+  local raw
+  load_ad_names
 
   # An empty or failed list is "none found", not an error: no reservation is
   # exactly the case the caller then creates.
@@ -195,16 +221,9 @@ load_inventory() {
     [ -n "$id" ] || continue
     detail=$(oci compute capacity-reservation get "${OCI_ARGS[@]}" \
                --capacity-reservation-id "$id" --query 'data' 2>/dev/null) || continue
-    # reserved-count, NOT reserved minus used: once this stack's own nodes launch
-    # they become the used count, so a free-host check would pass on create and
-    # fail every re-apply. Mirrors local.reservation_details in capacity.tf.
-    OWNED_JSON=$(jq -c --argjson acc "$OWNED_JSON" --arg id "$id" --arg shape "$TIER_SHAPE" '
-        $acc + [{
-          id: $id,
-          ad: ."availability-domain",
-          reserved: ([ (."instance-reservation-configs" // [])[]
-                       | select(."instance-shape" == $shape) | ."reserved-count" ] | add // 0)
-        }]' <<<"$detail")
+    OWNED_JSON=$(jq -c --argjson acc "$OWNED_JSON" --arg id "$id" \
+        --argjson reserved "$(reserved_count_for_shape "$detail")" '
+        $acc + [{ id: $id, ad: ."availability-domain", reserved: $reserved }]' <<<"$detail")
   done < <(jq -r --arg tagk "$TAG_KEY" --arg name "$STACK_NAME" \
              '(. // []) | map(select(."freeform-tags"[$tagk] == $name)) | .[].id' <<<"$raw")
 }
@@ -271,10 +290,44 @@ ad_name_for() {
   printf '%s' "$name"
 }
 
+# Issues the one reservation-create call both ensure_reservation and probe_ad
+# need, and registers the result before handing it back.
+#
+# No instanceShapeConfig: bare-metal shapes have fixed OCPU/memory and reject
+# it, the same rule capacity.tf applies via regexall("Flex", ...).
+#
+# Emits "<ocid> <reserved-count>". Returns non-zero when OCI refuses the request
+# outright, rather than dying: the caller may already hold reservations from
+# earlier ADs and only it can release them.
+create_reservation() {
+  local ad_name=$1 want=$2 display=$3 out id
+  local cmd=(oci compute capacity-reservation create "${OCI_ARGS[@]}"
+    -c "$COMPARTMENT_ID"
+    --availability-domain "$ad_name"
+    --display-name "$display"
+    --freeform-tags "{\"$TAG_KEY\":\"$STACK_NAME\"}"
+    --instance-reservation-configs "[{\"instanceShape\":\"$TIER_SHAPE\",\"reservedCount\":$want}]"
+    --wait-for-state ACTIVE --wait-interval-seconds 5)
+
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '  [dry-run] %s\n' "${cmd[*]}" >&2
+    printf 'ocid1.capacityreservation.oc1..DRYRUN-%s %s' "$display" "$want"
+    return 0
+  fi
+
+  # --wait-for-state makes this the post-wait object, so it already carries the
+  # granted counts; asking for data.id alone would throw them away and force a
+  # second call to learn whether OCI filled the request.
+  out=$("${cmd[@]}" --query 'data' 2>/dev/null) || return 1
+  id=$(jq -r '.id' <<<"$out")
+  printf '%s\n' "$id" >>"$CREATED_LOG"
+  printf '%s %s' "$id" "$(reserved_count_for_shape "$out")"
+}
+
 # Emits "<ocid> <reserved-count>" — the count is already known on both paths, so
 # the caller never has to re-read the reservation to verify it.
 ensure_reservation() {
-  local ad_num=$1 want=$2 ad_name existing created
+  local ad_num=$1 want=$2 ad_name existing made
   ad_name=$(ad_name_for "$ad_num")
 
   existing=$(jq -r --arg ad "$ad_name" --argjson want "$want" \
@@ -286,34 +339,74 @@ ensure_reservation() {
     return 0
   fi
 
-  # No instanceShapeConfig: bare-metal shapes have fixed OCPU/memory and reject
-  # it, the same rule capacity.tf applies via regexall("Flex", ...).
-  local cmd=(oci compute capacity-reservation create "${OCI_ARGS[@]}"
-    -c "$COMPARTMENT_ID"
-    --availability-domain "$ad_name"
-    --display-name "$STACK_NAME-ad$ad_num"
-    --freeform-tags "{\"$TAG_KEY\":\"$STACK_NAME\"}"
-    --instance-reservation-configs "[{\"instanceShape\":\"$TIER_SHAPE\",\"reservedCount\":$want}]"
-    --wait-for-state ACTIVE)
-
   echo "  AD-$ad_num ($ad_name): creating a reservation for $want x $TIER_SHAPE" >&2
+  made=$(create_reservation "$ad_name" "$want" "$STACK_NAME-ad$ad_num") || return 1
+  printf '%s' "$made"
+}
+
+# Warns instead of aborting, so a failed cleanup never masks the error that
+# triggered it, and returns the delete's status so callers can tell whether the
+# reservation is really gone.
+release_reservation() {
   if [ "$DRY_RUN" = 1 ]; then
-    printf '  [dry-run] %s\n' "${cmd[*]}" >&2
-    printf 'ocid1.capacityreservation.oc1..DRYRUN-ad%s %s' "$ad_num" "$want"
+    printf '    [dry-run] release %s\n' "$1" >&2
     return 0
   fi
-
-  # --wait-for-state makes this the post-wait object, so it already carries the
-  # granted counts; asking for data.id alone would throw them away and force a
-  # second call to learn whether OCI filled the request.
-  created=$("${cmd[@]}" --query 'data' 2>/dev/null) \
-    || die "could not create a reservation in $ad_name — check the 'manage capacity-reservations' permission and your service limits"
-
-  jq -r --arg shape "$TIER_SHAPE" '
-      "\(.id) \([ (."instance-reservation-configs" // [])[]
-                  | select(."instance-shape" == $shape) | ."reserved-count" ] | add // 0)"' \
-    <<<"$created"
+  if oci compute capacity-reservation delete "${OCI_ARGS[@]}" \
+       --capacity-reservation-id "$1" --force \
+       --wait-for-state SUCCEEDED --wait-interval-seconds 5 >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "    WARNING: could not delete $1 — it is STILL BILLING" >&2
+  return 1
 }
+
+created_count() { wc -l <"$CREATED_LOG" | tr -d ' '; }
+
+# Releases what this run created and nothing else: a reused reservation predates
+# the run, so releasing it would destroy something the caller never agreed to
+# give up. Whatever would not delete stays registered, so it is still reported.
+release_created() {
+  local ids=() failed=() rid
+  while read -r rid; do [ -n "$rid" ] && ids+=("$rid"); done <"$CREATED_LOG"
+  [ ${#ids[@]} -gt 0 ] || return 0
+  echo "  releasing the ${#ids[@]} reservation(s) this run created:" >&2
+  for rid in "${ids[@]}"; do
+    echo "    $rid" >&2
+    if ! release_reservation "$rid"; then failed+=("$rid"); fi
+  done
+  : >"$CREATED_LOG"
+  if [ ${#failed[@]} -gt 0 ]; then printf '%s\n' "${failed[@]}" >>"$CREATED_LOG"; fi
+}
+
+# Drops an id already known to be gone, so an interrupt later does not try to
+# delete it a second time.
+forget_reservation() {
+  grep -v -x -F "$1" "$CREATED_LOG" >"$CREATED_LOG.keep" 2>/dev/null || :
+  mv -f "$CREATED_LOG.keep" "$CREATED_LOG"
+}
+
+# --- rollback --------------------------------------------------------------
+
+# A file rather than an array: creates happen inside command substitutions, and
+# a subshell cannot append to its parent's array.
+CREATED_LOG=$(mktemp "${TMPDIR:-/tmp}/reserve-deploy.XXXXXX")
+ROLLBACK_ARMED=0
+trap 'rm -f "$CREATED_LOG" "$CREATED_LOG.keep"' EXIT
+
+# Ctrl-C during a multi-minute --wait-for-state is the easiest way to strand a
+# reservation, so an interrupt releases too — but only while armed. Once the
+# ids are handed to the stack, the cluster being built depends on them and
+# 'teardown --confirm' becomes the only correct way to give them back.
+on_interrupt() {
+  trap - INT TERM
+  if [ "$ROLLBACK_ARMED" = 1 ]; then
+    printf '\ninterrupted\n' >&2
+    release_created
+  fi
+  exit 130
+}
+trap on_interrupt INT TERM
 
 # --- actions ---------------------------------------------------------------
 
@@ -389,25 +482,50 @@ do_deploy() {
 
   say "Reservations"
   load_inventory
-  local ids=() short=()
+  ROLLBACK_ARMED=1
+  local ids=() short=() rid rcount
   for i in "${!AD_NUMS[@]}"; do
-    local pair; pair=$(ensure_reservation "${AD_NUMS[i]}" "$RESERVE_EACH")
-    ids+=("${pair%% *}")
+    local pair
+    if ! pair=$(ensure_reservation "${AD_NUMS[i]}" "$RESERVE_EACH"); then
+      printf '\n' >&2
+      release_created
+      die "could not create a reservation in AD-${AD_NUMS[i]} — check the
+       'manage capacity-reservations' permission and your service limits."
+    fi
+    read -r rid rcount <<<"$pair"
+    ids+=("$rid")
     # OCI fills a reservation PARTIALLY when it is short. The stack's
     # reservation_gate catches this too, but only after stack-create and a
     # plan — failing here saves that round trip and names the shortfall per AD.
-    [ "${pair##* }" -lt "$RESERVE_EACH" ] \
-      && short+=("AD-${AD_NUMS[i]} needs $RESERVE_EACH, holds ${pair##* }")
+    if [ "$rcount" -lt "$RESERVE_EACH" ]; then
+      short+=("AD-${AD_NUMS[i]} needs $RESERVE_EACH, holds $rcount")
+    fi
   done
 
   if [ ${#short[@]} -gt 0 ]; then
     printf '\n'
+    # A short set is unusable, so holding it only bills. Leaving it behind is how
+    # a failed attempt silently turns into a recurring charge nobody is tracking.
+    local made; made=$(created_count)
+    local note="No reservation was created, so nothing is billing."
+    if [ "$made" -gt 0 ]; then
+      release_created
+      note="The $made reservation(s) created above were released."
+    fi
+    if [ "$made" -ne ${#ids[@]} ]; then
+      note="$note Pre-existing reservations were left alone and still bill;
+       'teardown --confirm' removes them."
+    fi
     die "OCI granted fewer hosts than requested:
        $(printf '%s; ' "${short[@]}")
-       Even out the reservations, spread over more ADs (--ads 1,2,3), or pick a
-       smaller tier. The reservations already created are tagged $TAG_KEY=$STACK_NAME
-       and are billing — 'teardown --confirm' removes them."
+       $note
+       'probe' measures what each AD will really give, without committing:
+         scripts/reserve-deploy.sh probe -c $COMPARTMENT_ID -r $REGION --nodes $NODE_COUNT"
   fi
+
+  # The ids are about to become the stack's, so stop treating them as this run's
+  # to release: from here the cluster depends on them and teardown is the way.
+  ROLLBACK_ARMED=0
 
   local joined; joined=$(IFS=,; echo "${ids[*]}")
   say "Deploying stack '$STACK_NAME'"
@@ -439,6 +557,109 @@ do_deploy() {
     OPERATOR_NS="$(read_output operator_namespace)" scripts/wait-ready.sh
 }
 
+# Measures what an AD will really give, by reserving and immediately releasing.
+#
+# This is the only accurate source. compute-capacity-report returns
+# available_count = null for these shapes, so its AVAILABLE means ">= 1" and
+# nothing more (TROUBLESHOOTING.md §6) — in eu-frankfurt-1 on 2026-10-04 an AD
+# reporting AVAILABLE held exactly one host. OCI fills a reservation partially
+# instead of refusing it, and that partial count IS the measurement.
+#
+# Emits the granted count on stdout; everything else goes to stderr.
+probe_ad() {
+  local ad_num=$1 want=$2 ad_name made id n
+  ad_name=$(ad_name_for "$ad_num")
+
+  if ! made=$(create_reservation "$ad_name" "$want" "$STACK_NAME-probe-ad$ad_num"); then
+    echo "  AD-$ad_num ($ad_name): refused outright — none available" >&2
+    printf '0'
+    return 0
+  fi
+  read -r id n <<<"$made"
+
+  if [ "$DRY_RUN" = 1 ]; then
+    release_reservation "$id" || :
+    printf '0'
+    return 0
+  fi
+
+  echo "  AD-$ad_num ($ad_name): granted $n of $want" >&2
+  if release_reservation "$id"; then forget_reservation "$id"; fi
+  printf '%s' "$n"
+}
+
+do_probe() {
+  load_ad_names
+
+  # Without --ads there is nothing to guess at: probe every AD the region has.
+  if [ -z "$ADS" ]; then
+    local nums=() n
+    while read -r n; do [ -n "$n" ] && nums+=("$n"); done \
+      < <(jq -r 'map(sub(".*-AD-"; "")) | sort | .[]' <<<"$AD_NAMES_JSON")
+    [ ${#nums[@]} -eq 0 ] || AD_NUMS=("${nums[@]}")
+  fi
+
+  ROLLBACK_ARMED=1
+  say "Probing $REGION for $TIER_SHAPE"
+  echo "  asking each of AD-$(IFS=,; echo "${AD_NUMS[*]}") for $NODE_COUNT, then releasing"
+
+  local granted=() i
+  for i in "${!AD_NUMS[@]}"; do
+    granted+=("$(probe_ad "${AD_NUMS[i]}" "$NODE_COUNT")")
+  done
+
+  say "Free capacity"
+  for i in "${!AD_NUMS[@]}"; do
+    printf '  AD-%-4s %s of %s\n' "${AD_NUMS[i]}" "${granted[i]}" "$NODE_COUNT"
+  done
+
+  # Largest count these ADs can serve, given that one size has to cover every AD
+  # in the set. p ADs fit N exactly when the p-th largest grant covers ceil(N/p),
+  # so this doubles as the test for whether any layout fits at all.
+  local desc=() best=0 p cand n
+  while read -r n; do desc+=("$n"); done < <(printf '%s\n' "${granted[@]}" | sort -rn)
+  for (( p=1; p<=${#desc[@]}; p++ )); do
+    cand=$(( p * desc[p-1] ))
+    if [ "$cand" -gt "$best" ]; then best=$cand; fi
+  done
+
+  say "Layouts that fit $NODE_COUNT nodes"
+  if [ "$best" -lt "$NODE_COUNT" ]; then
+    if [ "$best" -gt 0 ]; then
+      echo "  none — the most these ADs can serve right now is $best node(s)."
+      echo "  Try another region, or re-run with --nodes $best."
+    else
+      echo "  none — these ADs have no $TIER_SHAPE at all. Try another region."
+    fi
+  else
+    local need ok list spare
+    for (( p=1; p<=${#AD_NUMS[@]}; p++ )); do
+      need=$(reserve_each "$NODE_COUNT" "$p")
+      ok=()
+      for i in "${!AD_NUMS[@]}"; do
+        if [ "${granted[i]}" -ge "$need" ]; then ok+=("${AD_NUMS[i]}"); fi
+      done
+      if [ ${#ok[@]} -ge "$p" ]; then
+        list=$(IFS=,; echo "${ok[*]:0:$p}")
+        spare=$(( need * p - NODE_COUNT ))
+        if [ "$spare" -gt 0 ]; then
+          printf '  --ads %-10s %s per AD + %s spare reserved\n' "$list" "$need" "$spare"
+        else
+          printf '  --ads %-10s %s per AD\n' "$list" "$need"
+        fi
+      fi
+    done
+    echo "  (the first line spreads least — prefer it; TROUBLESHOOTING.md §6)"
+  fi
+
+  if [ "$(created_count)" -eq 0 ]; then
+    say "Nothing was left reserved"
+  else
+    say "WARNING: $(created_count) probe reservation(s) could not be released and ARE BILLING"
+    sed 's/^/  /' "$CREATED_LOG"
+  fi
+}
+
 do_teardown() {
   [ "$CONFIRM" = 1 ] || die "teardown destroys the cluster and deletes the reservations — pass --confirm"
 
@@ -457,8 +678,9 @@ do_teardown() {
     [ -n "$id" ] || continue
     found=1
     echo "  $id ($ad)"
-    run oci compute capacity-reservation delete "${OCI_ARGS[@]}" \
-      --capacity-reservation-id "$id" --force --wait-for-state SUCCEEDED
+    # Warn-and-continue, not abort: under set -e an inline delete would strand
+    # every reservation after the first failure, unmentioned.
+    release_reservation "$id" || :
   done < <(jq -r '.[] | "\(.id) \(.ad)"' <<<"$OWNED_JSON")
   [ "$found" = 0 ] && echo "  none found"
   say "Done"
@@ -466,5 +688,6 @@ do_teardown() {
 
 case "$ACTION" in
   deploy)   do_deploy ;;
+  probe)    do_probe ;;
   teardown) do_teardown ;;
 esac
