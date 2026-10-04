@@ -119,3 +119,13 @@ provider "helm" {
     }
   }
 }
+
+# Rendering a chart is a purely local operation, so this alias is UNCONFIGURED on
+# purpose — and must stay that way. data.helm_template.weka_operator (weka.tf) is
+# for_each'd over, so its result has to be known at PLAN time; under the default
+# provider above it would inherit a kubernetes config derived from module.oke,
+# which is unknown on a first apply, and the for_each would then fail with
+# "depends on resource attributes that cannot be determined until apply".
+provider "helm" {
+  alias = "render"
+}

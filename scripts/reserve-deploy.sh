@@ -28,6 +28,7 @@ REGION=${REGION:-}
 COMPARTMENT_ID=${COMPARTMENT_ID:-}
 TIER=""
 NODES=""
+OPERATOR_VERSION=${OPERATOR_VERSION:-}
 ADS="1"
 STACK_NAME=${STACK_NAME:-weka-oke-test}
 DRY_RUN=0
@@ -55,6 +56,8 @@ Flags:
   -r, --region NAME           OCI region, e.g. eu-frankfurt-1 (required)
       --tier STRING           production_tier. Defaults to the Makefile's TIER.
       --nodes N               Override the worker count the tier implies.
+      --operator-version V    WEKA operator chart version, e.g. v1.16.3.
+                              Defaults to the stack's own default.
       --ads N[,N...]          AD numbers to reserve in (default: 1).
       --stack-name NAME       ORM stack display name (default: weka-oke-test).
       --skip-ready            Stop after apply; do not track WEKA readiness.
@@ -88,6 +91,7 @@ while [ $# -gt 0 ]; do
     -r|--region)         REGION=$2; shift 2 ;;
     --tier)              TIER=$2; shift 2 ;;
     --nodes)             NODES=$2; shift 2 ;;
+    --operator-version)  OPERATOR_VERSION=$2; shift 2 ;;
     --ads)               ADS=$2; shift 2 ;;
     --stack-name)        STACK_NAME=$2; shift 2 ;;
     --skip-ready)        SKIP_READY=1; shift ;;
@@ -372,6 +376,7 @@ do_deploy() {
   else
     echo "  workers: $NODE_COUNT"
   fi
+  [ -n "$OPERATOR_VERSION" ] && echo "  operator: $OPERATOR_VERSION"
   echo "  reserving: $RESERVE_EACH hosts in each of AD-$(IFS=,; echo "${AD_NUMS[*]}")"
   if [ "$RESERVE_EXTRA" -gt 0 ]; then
     echo "  note: $RESERVE_EXTRA more reserved host(s) than nodes. The stack pairs pool sizes to"
@@ -409,6 +414,9 @@ do_deploy() {
   echo "  capacity_reservation_ids = $joined"
   local create_args=("${MAKE_ARGS[@]}" TIER="$TIER" RESERVATIONS="$joined")
   [ -n "$NODES" ] && create_args+=(NODES="$NODES")
+  # Only when non-empty: an empty var on make's command line would beat the same
+  # variable inherited from make's own environment.
+  [ -n "$OPERATOR_VERSION" ] && create_args+=(OPERATOR_VERSION="$OPERATOR_VERSION")
   run make stack-create "${create_args[@]}"
   run make apply CONFIRM=yes "${MAKE_ARGS[@]}"
 

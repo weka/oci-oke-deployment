@@ -299,7 +299,7 @@ status: guard-REGION ## Show the last job's state
 	  --query 'data.{state:"lifecycle-state",operation:operation,time:"time-created"}'
 
 outputs: guard-REGION ## Show stack outputs (kubeconfig command, weka_sizing, ...)
-	@oci resource-manager stack list-associated-resources $(OCI_ARGS) \
+	@oci resource-manager associated-resource-summary list-stack-associated-resources $(OCI_ARGS) \
 	  --stack-id $$(cat $(STACK_ID_FILE)) --query 'data[*]."resource-type"' 2>/dev/null | head -20 || true
 	@oci resource-manager stack get-stack-tf-state $(OCI_ARGS) \
 	  --stack-id $$(cat $(STACK_ID_FILE)) --file - 2>/dev/null \

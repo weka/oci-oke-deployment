@@ -4,7 +4,7 @@
 # whole WEKA layer wait until the cluster AND its worker node pool AND the
 # data-plane security-list fix are done — otherwise the operator pods would have no
 # nodes to schedule on. gavinbunney/kubectl resolves the CR kinds at apply time, so
-# the CRs tolerate the CRDs having just been installed by the Helm chart.
+# the CRs tolerate the CRDs having just been installed by kubectl_manifest.weka_crd.
 #
 # NOTE: the CR manifests live in crds/ alongside this config so the stack is
 # self-contained — a standalone zip (ORM upload / publish / Deploy-to-Oracle-Cloud)
@@ -188,6 +188,52 @@ resource "kubernetes_secret_v1" "quay" {
   depends_on = [kubernetes_namespace_v1.operator]
 }
 
+# Apply the selected chart version's CRDs ourselves, because Helm will not.
+#
+# Helm 3 applies a chart's crds/ directory on INSTALL ONLY — `helm upgrade` never
+# updates it. The weka-operator chart ships its CRDs there, so raising
+# operator_version on an existing stack upgrades the operator Deployment against
+# the schema the cluster was FIRST built with, and nothing fails loudly: the API
+# server silently prunes the fields the new operator sets, and the damage surfaces
+# nowhere near the Helm release.
+#
+# helm_template only renders — it needs no cluster, and reads at plan time, so a
+# bad operator_version or bad quay credentials fail the PLAN rather than an apply
+# that has already built a cluster. It must use the unconfigured helm.render
+# alias; providers.tf explains why.
+data "helm_template" "weka_operator" {
+  provider = helm.render
+
+  name                = "weka-operator"
+  chart               = "weka-operator"
+  repository          = "oci://quay.io/weka.io/helm"
+  version             = var.operator_version
+  namespace           = local.operator_namespace
+  repository_username = var.quay_username
+  repository_password = var.quay_password
+  include_crds        = true
+}
+
+# Keyed by CRD name, so the resource addresses stay stable and readable as the
+# chart's CRD set changes. Server-side apply with force_conflicts because on an
+# upgrade these fields are owned by Helm's field manager from the original install.
+resource "kubectl_manifest" "weka_crd" {
+  for_each = { for c in data.helm_template.weka_operator.crds : yamldecode(c).metadata.name => c }
+
+  yaml_body         = each.value
+  server_side_apply = true
+  force_conflicts   = true
+
+  # Never delete these. Deleting a CRD cascades to every CR of that kind, so a
+  # destroy would race null_resource.weka_teardown's finalizer drain for the right
+  # to remove the wekacontainers — and losing that race is the namespace-stuck-
+  # Terminating deadlock the teardown exists to prevent. The cluster is destroyed
+  # in the same run anyway, which takes the CRDs with it.
+  apply_only = true
+
+  depends_on = [module.oke, null_resource.wait_for_kube_api]
+}
+
 resource "helm_release" "weka_operator" {
   name       = "weka-operator"
   repository = "oci://quay.io/weka.io/helm"
@@ -208,9 +254,8 @@ resource "helm_release" "weka_operator" {
     value = "20m"
   }]
 
-  # Chart-bundled CRDs install automatically; wait=true blocks until the release
-  # is ready before the CRs apply.
-  depends_on = [kubernetes_secret_v1.quay, module.oke, null_resource.wait_for_kube_api]
+  # wait=true blocks until the release is ready before the CRs apply.
+  depends_on = [kubernetes_secret_v1.quay, module.oke, null_resource.wait_for_kube_api, kubectl_manifest.weka_crd]
 
   # Fail loudly (on this always-present resource) if the bundled CR manifests are
   # missing, instead of silently applying zero custom resources via an empty

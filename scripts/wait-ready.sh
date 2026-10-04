@@ -34,6 +34,9 @@ set -uo pipefail
 : "${READY_TIMEOUT:=2400}"
 : "${READY_INTERVAL:=15}"
 
+# Seconds of no change before poll prints a bare "still waiting" line.
+: "${READY_HEARTBEAT:=120}"
+
 # Worker count to expect. 0 = accept any node, which defeats the point of this
 # phase; reserve-deploy.sh always sets it.
 : "${EXPECTED_NODES:=0}"
@@ -65,22 +68,36 @@ DEADLINE=$(( $(now) + READY_TIMEOUT ))
 
 hms() { printf '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 )); }
 
+# Phase predicates build their output into REPORT rather than echoing it, so poll
+# can suppress a repeat of the identical block. They still return 0/1 to mean ready.
+REPORT=""
+
 poll() {
-  local desc="$1" fn="$2" started
-  started=$(now)
+  local desc="$1" fn="$2" started last="" beat ok n
+  started=$(now); beat=$started
   echo
   echo ">> $desc"
   while true; do
-    if "$fn"; then
-      echo "   OK after $(hms $(( $(now) - started )))"
+    REPORT=""
+    "$fn"; ok=$?
+    n=$(now)
+    if [ -n "$REPORT" ] && [ "$REPORT" != "$last" ]; then
+      printf '%s\n' "$REPORT"
+      last=$REPORT; beat=$n
+    elif [ "$ok" -ne 0 ] && [ $(( n - beat )) -ge "$READY_HEARTBEAT" ]; then
+      echo "   ... unchanged ($(hms $(( n - started ))) elapsed)"
+      beat=$n
+    fi
+    if [ "$ok" -eq 0 ]; then
+      echo "   OK after $(hms $(( n - started )))"
       return 0
     fi
     if [ -n "$fatal_seen" ]; then
       echo "   FATAL: $fatal_seen — this state does not recover on its own."
       return 1
     fi
-    if [ "$(now)" -ge "$DEADLINE" ]; then
-      echo "   TIMEOUT after $(hms $(( $(now) - started ))) — overall budget of $(hms "$READY_TIMEOUT") exhausted"
+    if [ "$n" -ge "$DEADLINE" ]; then
+      echo "   TIMEOUT after $(hms $(( n - started ))) — overall budget of $(hms "$READY_TIMEOUT") exhausted"
       return 1
     fi
     sleep "$READY_INTERVAL"
@@ -93,7 +110,7 @@ nodes_ready() {
   local rows counts
   rows=$(kubectl get nodes --no-headers 2>/dev/null)
   counts=$(awk 'NF {t++} $2 == "Ready" {r++} END {print r+0, t+0}' <<<"$rows")
-  echo "   nodes Ready: ${counts% *}/$EXPECTED_NODES (registered: ${counts#* })"
+  REPORT="   nodes Ready: ${counts% *}/$EXPECTED_NODES (registered: ${counts#* })"
   [ "${counts% *}" -ge "$EXPECTED_NODES" ] && [ "${counts% *}" -gt 0 ]
 }
 
@@ -106,8 +123,8 @@ operator_ready() {
   rows=$(kubectl -n "$OPERATOR_NS" get deploy \
     -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,WANT:.spec.replicas \
     --no-headers 2>/dev/null)
-  [ -n "$rows" ] || { echo "   no deployments in $OPERATOR_NS yet"; return 1; }
-  sed 's/^/     /' <<<"$rows"
+  [ -n "$rows" ] || { REPORT="   no deployments in $OPERATOR_NS yet"; return 1; }
+  REPORT=$(sed 's/^/     /' <<<"$rows")
   ! awk '$2 != $3 {bad=1} END {exit !bad}' <<<"$rows"
 }
 
@@ -118,8 +135,8 @@ policies_done() {
   local rows bad
   rows=$(kubectl get wekapolicy -n "$CLUSTER_NS" \
     -o custom-columns=NAME:.metadata.name,STATUS:.status.status --no-headers 2>/dev/null)
-  [ -n "$rows" ] || { echo "   no wekapolicy objects yet"; return 1; }
-  printf '%s\n' "$rows" | sed 's/^/     /'
+  [ -n "$rows" ] || { REPORT="   no wekapolicy objects yet"; return 1; }
+  REPORT=$(printf '%s\n' "$rows" | sed 's/^/     /')
   bad=$(printf '%s\n' "$rows" | awk -v re="$POLICY_FATAL" '$2 ~ re {print $1}')
   [ -n "$bad" ] && { fatal_seen="wekapolicy $POLICY_FATAL: $(tr '\n' ' ' <<<"$bad")"; return 1; }
   ! printf '%s\n' "$rows" | awk -v ok="$POLICY_OK" '$2 != ok' | grep -q .
@@ -130,8 +147,8 @@ policies_done() {
 containers_running() {
   local rows real
   rows=$(kubectl get wekacontainers -n "$CLUSTER_NS" --no-headers 2>/dev/null)
-  [ -n "$rows" ] || { echo "   no wekacontainers yet (operator has not built the cluster)"; return 1; }
-  awk '{printf "     %-44s %s\n", $1, $2}' <<<"$rows"
+  [ -n "$rows" ] || { REPORT="   no wekacontainers yet (operator has not built the cluster)"; return 1; }
+  REPORT=$(awk '{printf "     %-44s %s\n", $1, $2}' <<<"$rows")
   real=$(printf '%s\n' "$rows" | awk 'NF && $3 !~ /adhoc/ {print $2}')
   [ -n "$real" ] || return 1
   ! printf '%s\n' "$real" | grep -vqE "$CONTAINER_OK"
@@ -140,12 +157,12 @@ containers_running() {
 cluster_ready() {
   local json line
   json=$(kubectl get wekacluster "$WEKA_CLUSTER_NAME" -n "$CLUSTER_NS" -o json 2>/dev/null)
-  [ -n "$json" ] || { echo "   wekacluster/$WEKA_CLUSTER_NAME not created yet"; return 1; }
+  [ -n "$json" ] || { REPORT="   wekacluster/$WEKA_CLUSTER_NAME not created yet"; return 1; }
   line=$(jq -r '"\(.status.status // "-") | drives \(.status.printer.drives // "-")
                  dct \(.status.printer.driveContainers // "-")
                  cct \(.status.printer.computeContainers // "-") (active/created/desired)"
                | gsub("\\s+"; " ")' <<<"$json")
-  echo "   wekacluster/$WEKA_CLUSTER_NAME: $line"
+  REPORT="   wekacluster/$WEKA_CLUSTER_NAME: $line"
   [ "${line%% *}" = "$CLUSTER_OK" ]
 }
 
@@ -153,7 +170,7 @@ client_ready() {
   local status
   status=$(kubectl get wekaclient "$WEKA_CLIENT_NAME" -n "$CLUSTER_NS" \
     -o jsonpath='{.status.status}' 2>/dev/null)
-  echo "   wekaclient/$WEKA_CLIENT_NAME: ${status:--}"
+  REPORT="   wekaclient/$WEKA_CLIENT_NAME: ${status:--}"
   [ "$status" = "$CLIENT_OK" ]
 }
 
