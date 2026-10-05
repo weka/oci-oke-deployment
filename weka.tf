@@ -28,11 +28,13 @@ locals {
     } : field => value if value != null
   }
 
-  # Values injected into the WekaCluster CR (crds/03-wekacluster.yaml) via
-  # templatefile(). The protection scheme stays Terraform-derived (it follows from
-  # the node count, which the stack fixes) while the container/core layout is left
-  # to the operator unless explicitly overridden.
+  # Values injected into the WEKA CRs (crds/*.yaml) via templatefile(). The
+  # protection scheme stays Terraform-derived (it follows from the node count,
+  # which the stack fixes) while the container/core layout is left to the operator
+  # unless explicitly overridden.
   weka_cr_vars = {
+    weka_version = var.weka_version
+
     dynamic_template = local.weka_dynamic_template
     redundancy_level = local.weka_redundancy
     stripe_width     = local.weka_stripe_width

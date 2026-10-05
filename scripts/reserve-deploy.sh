@@ -13,7 +13,7 @@
 # zip/stack-create/apply/wait-job, and this drives those targets.
 #
 # Usage:
-#   scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> [flags]
+#   scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> -w <weka-version> [flags]
 #   scripts/reserve-deploy.sh probe    -c <compartment-ocid> -r <region> [flags]
 #   scripts/reserve-deploy.sh teardown -c <compartment-ocid> -r <region> --confirm
 #
@@ -30,6 +30,7 @@ COMPARTMENT_ID=${COMPARTMENT_ID:-}
 TIER=""
 NODES=""
 OPERATOR_VERSION=${OPERATOR_VERSION:-}
+WEKA_VERSION=${WEKA_VERSION:-}
 ADS=""
 STACK_NAME=${STACK_NAME:-weka-oke-test}
 DRY_RUN=0
@@ -46,13 +47,14 @@ Reserve the DenseIO hosts, deploy the stack onto them, then follow it to a
 usable WEKA cluster. Reserving up front is the only way a production apply
 cannot fail with "Out of host capacity" (TROUBLESHOOTING.md §6).
 
-  scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> [flags]
+  scripts/reserve-deploy.sh deploy   -c <compartment-ocid> -r <region> -w <weka-version> [flags]
   scripts/reserve-deploy.sh probe    -c <compartment-ocid> -r <region> [flags]
   scripts/reserve-deploy.sh teardown -c <compartment-ocid> -r <region> --confirm
 
 probe measures how many hosts each AD will actually give, by reserving and
-immediately releasing. It leaves nothing behind and needs no Quay credentials.
-Use it to pick --ads and --nodes before committing to a deploy.
+immediately releasing. It leaves nothing behind and needs no Quay credentials
+and no WEKA version. Use it to pick --ads and --nodes before committing to a
+deploy.
 
 QUAY_USERNAME and QUAY_PASSWORD must be set for deploy. OCI_PROFILE and
 SSH_PUBLIC_KEY_FILE are passed through to make when set.
@@ -60,6 +62,9 @@ SSH_PUBLIC_KEY_FILE are passed through to make when set.
 Flags:
   -c, --compartment-id OCID   Target compartment (required)
   -r, --region NAME           OCI region, e.g. eu-frankfurt-1 (required)
+  -w, --weka-version V        WEKA version, e.g. 5.1.34. Required by deploy —
+                              the stack has no default (the CRDs require an
+                              explicit image). Ignored by probe/teardown.
       --tier STRING           production_tier. Defaults to the Makefile's TIER.
       --nodes N               Override the worker count the tier implies.
       --operator-version V    WEKA operator chart version, e.g. v1.16.3.
@@ -96,6 +101,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -c|--compartment-id) COMPARTMENT_ID=$2; shift 2 ;;
     -r|--region)         REGION=$2; shift 2 ;;
+    -w|--weka-version)   WEKA_VERSION=$2; shift 2 ;;
     --tier)              TIER=$2; shift 2 ;;
     --nodes)             NODES=$2; shift 2 ;;
     --operator-version)  OPERATOR_VERSION=$2; shift 2 ;;
@@ -427,6 +433,13 @@ do_deploy() {
   # created — a guard that fires afterwards leaves billing hosts behind.
   [ -n "${QUAY_USERNAME:-}" ] && [ -n "${QUAY_PASSWORD:-}" ] \
     || die "QUAY_USERNAME and QUAY_PASSWORD must be set (the image pull secret)"
+  [ -n "$WEKA_VERSION" ] \
+    || die "--weka-version is required (e.g. -w 5.1.34) — the stack has no default"
+  # Checked here, not left to the stack: the CRDs' image pattern is enforced by
+  # the API server, so a typo would surface only after the reservations exist and
+  # the cluster is built.
+  [[ $WEKA_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] \
+    || die "--weka-version must start with MAJOR.MINOR.PATCH, e.g. 5.1.34 (got '$WEKA_VERSION')"
   local ssh_key=${SSH_PUBLIC_KEY_FILE:-$(make -s print-SSH_PUBLIC_KEY_FILE)}
   [ -n "$ssh_key" ] && [ -f "$ssh_key" ] \
     || die "no SSH public key found (looked for ~/.ssh/id_ed25519.pub, ~/.ssh/id_rsa.pub)
@@ -462,6 +475,7 @@ do_deploy() {
   if [ -n "$tenancy" ]; then MAKE_ARGS+=(TENANCY_ID="$tenancy"); fi
 
   say "Plan"
+  echo "  weka:    $WEKA_VERSION"
   echo "  tier:    $TIER"
   echo "  shape:   $TIER_SHAPE"
   if [ -n "$NODES" ]; then
@@ -530,7 +544,7 @@ do_deploy() {
   local joined; joined=$(IFS=,; echo "${ids[*]}")
   say "Deploying stack '$STACK_NAME'"
   echo "  capacity_reservation_ids = $joined"
-  local create_args=("${MAKE_ARGS[@]}" TIER="$TIER" RESERVATIONS="$joined")
+  local create_args=("${MAKE_ARGS[@]}" TIER="$TIER" RESERVATIONS="$joined" WEKA_VERSION="$WEKA_VERSION")
   [ -n "$NODES" ] && create_args+=(NODES="$NODES")
   # Only when non-empty: an empty var on make's command line would beat the same
   # variable inherited from make's own environment.

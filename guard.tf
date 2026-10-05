@@ -17,7 +17,8 @@
 #   create_vcn / vcn_id     — VCN topology
 #   capacity_reservation_ids — one worker pool per reservation, so adding or
 #                             removing one adds or destroys a whole pool
-# Left editable after apply: quay_username, quay_password, operator_version.
+# Left editable after apply: quay_username, quay_password, operator_version,
+# weka_version.
 # ---------------------------------------------------------------------------
 resource "terraform_data" "input_lock" {
   input = {

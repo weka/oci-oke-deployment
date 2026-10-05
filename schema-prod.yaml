@@ -83,8 +83,9 @@ variableGroups:
       - weka_drive_cores
       - weka_num_drives
 
-  - title: "WEKA (operator + image pull)"
+  - title: "WEKA (version + operator + image pull)"
     variables:
+      - weka_version
       - quay_username
       - quay_password
       - operator_version
@@ -110,6 +111,14 @@ variableGroups:
 
 variables:
   # --- WEKA ---
+  # No default — see variables.tf for why there cannot be one.
+  weka_version:
+    title: WEKA version
+    description: >-
+      WEKA version to deploy, e.g. 5.1.34 — must be a published
+      quay.io/weka.io/weka-in-container tag.
+    type: string
+    required: true
   quay_username:
     title: quay.io robot username
     description: From https://get.weka.io. Used for the image pull secret.

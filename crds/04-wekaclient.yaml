@@ -6,7 +6,7 @@ metadata:
 spec:
   autoRemoveTimeout: 0s
   coresNum: 1
-  image: quay.io/weka.io/weka-in-container:5.1.24
+  image: quay.io/weka.io/weka-in-container:${weka_version}
   imagePullSecret: quay-io-robot-secret
   targetCluster:
     name: dev

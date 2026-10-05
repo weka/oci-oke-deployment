@@ -425,6 +425,22 @@ variable "operator_version" {
   default     = "v1.16.3"
 }
 
+# No default ON PURPOSE: the WekaCluster and WekaClient CRDs both list spec.image
+# as required, so there is no version the operator would fall back to and none
+# this stack can pick on the deployer's behalf.
+variable "weka_version" {
+  description = "WEKA version to deploy, e.g. 5.1.34 — the weka-in-container image tag used by every WEKA CR."
+  type        = string
+
+  # The CRDs constrain spec.image to `^.+:\d+\.\d+\.\d+.*$` and that check runs in
+  # the API SERVER: a malformed version plans clean, builds the VCN, the control
+  # plane and every worker, and only fails ~20 minutes later when the CRs apply.
+  validation {
+    condition     = can(regex("^\\d+\\.\\d+\\.\\d+", var.weka_version))
+    error_message = "weka_version must start with MAJOR.MINOR.PATCH, e.g. 5.1.34 — the WekaCluster CRD rejects any other image tag."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # WekaCluster dynamicTemplate overrides.
 #

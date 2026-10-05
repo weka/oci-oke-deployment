@@ -4,7 +4,7 @@ metadata:
   name: ensure-nics-policy
   namespace: default
 spec:
-  image: quay.io/weka.io/weka-in-container:5.1.24
+  image: quay.io/weka.io/weka-in-container:${weka_version}
   imagePullSecret: quay-io-robot-secret
   payload:
     ensureNICsPayload:

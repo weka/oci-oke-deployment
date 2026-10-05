@@ -9,7 +9,7 @@
 #   make check                              # fmt + validate, no cloud calls
 #   make zip                                # build the prod stack zip from the tree
 #   make stack-create COMPARTMENT_ID=ocid1.compartment... REGION=eu-frankfurt-1 \
-#        QUAY_USERNAME=... QUAY_PASSWORD=...
+#        QUAY_USERNAME=... QUAY_PASSWORD=... WEKA_VERSION=5.1.34
 #   make plan                               # free dry run; validates schema.yaml too
 #   make apply CONFIRM=yes                  # spends money on bare metal
 #   make destroy CONFIRM=yes stack-delete   # tear it all down
@@ -186,6 +186,11 @@ NODES ?=
 # Unlike TIER this is NOT frozen by guard.tf, so it can be changed on a re-apply.
 OPERATOR_VERSION ?=
 
+# WEKA version -> weka_version. REQUIRED, unlike every other knob here: the stack
+# has no default (see variables.tf), so vars-json guards on it instead of letting
+# an apply get as far as the CRs and fail there. Not frozen by guard.tf.
+WEKA_VERSION ?=
+
 # Comma-separated capacity reservation OCIDs -> capacity_reservation_ids. Empty
 # launches on demand. Frozen by guard.tf after the first apply, like TIER.
 #
@@ -194,7 +199,7 @@ OPERATOR_VERSION ?=
 # the reservations' own ADs. scripts/reserve-deploy.sh fills this in.
 RESERVATIONS ?=
 
-vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASSWORD ## Write build/vars.json (stack inputs)
+vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASSWORD guard-WEKA_VERSION ## Write build/vars.json (stack inputs)
 	@mkdir -p $(BUILD)
 	@test -n "$(SSH_PUBLIC_KEY_FILE)" -a -f "$(SSH_PUBLIC_KEY_FILE)" || { \
 	  echo "ERROR: no SSH public key found (looked for ~/.ssh/id_ed25519.pub, ~/.ssh/id_rsa.pub)"; \
@@ -208,7 +213,7 @@ vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASS
 	 fi; \
 	 test -n "$$tenancy" || { echo "ERROR: could not determine the tenancy OCID — pass TENANCY_ID=ocid1.tenancy..."; exit 1; }; \
 	 TENANCY="$$tenancy" COMPARTMENT='$(COMPARTMENT_ID)' REGION_V='$(REGION)' TIER='$(TIER)' \
-	 OPVER='$(OPERATOR_VERSION)' NODES='$(NODES)' RESV='$(RESERVATIONS)' \
+	 OPVER='$(OPERATOR_VERSION)' NODES='$(NODES)' RESV='$(RESERVATIONS)' WEKAVER='$(WEKA_VERSION)' \
 	 QUAY_USERNAME='$(QUAY_USERNAME)' QUAY_PASSWORD='$(QUAY_PASSWORD)' \
 	 SSH_KEY_FILE='$(SSH_PUBLIC_KEY_FILE)' python3 -c 'import json,os; \
 	d={ \
@@ -216,6 +221,7 @@ vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASS
 	  "compartment_ocid": os.environ["COMPARTMENT"], \
 	  "region":           os.environ["REGION_V"], \
 	  "ssh_public_key":   open(os.environ["SSH_KEY_FILE"]).read().strip(), \
+	  "weka_version":     os.environ["WEKAVER"], \
 	  "quay_username":    os.environ["QUAY_USERNAME"], \
 	  "quay_password":    os.environ["QUAY_PASSWORD"]}; \
 	d.update({"production_tier": os.environ["TIER"]} if os.environ.get("TIER") else {}); \
@@ -224,7 +230,7 @@ vars-json: guard-REGION guard-COMPARTMENT_ID guard-QUAY_USERNAME guard-QUAY_PASS
 	d.update({"capacity_reservation_ids": os.environ["RESV"]} if os.environ.get("RESV") else {}); \
 	print(json.dumps(d))' > $(BUILD)/vars.json; \
 	 chmod 600 $(BUILD)/vars.json; \
-	 echo "wrote $(BUILD)/vars.json (tenancy $$tenancy$(if $(TIER), / tier: $(TIER),)$(if $(NODES), / nodes: $(NODES),)$(if $(OPERATOR_VERSION), / operator: $(OPERATOR_VERSION),)$(if $(RESERVATIONS), / reservations: $(RESERVATIONS),))"
+	 echo "wrote $(BUILD)/vars.json (tenancy $$tenancy / weka: $(WEKA_VERSION)$(if $(TIER), / tier: $(TIER),)$(if $(NODES), / nodes: $(NODES),)$(if $(OPERATOR_VERSION), / operator: $(OPERATOR_VERSION),)$(if $(RESERVATIONS), / reservations: $(RESERVATIONS),))"
 
 stack-create: zip vars-json ## Create an ORM stack from the current tree
 	@id=$$(oci resource-manager stack create $(OCI_ARGS) \

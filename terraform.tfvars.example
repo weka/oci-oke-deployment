@@ -9,6 +9,10 @@ compartment_ocid = "ocid1.compartment.oc1..xxxxx"
 quay_username = "weka.io+robot"
 quay_password = "..."
 
+# REQUIRED — WEKA version to deploy; no default (the CRDs require an explicit
+# image). Must be a published quay.io/weka.io/weka-in-container tag.
+weka_version = "5.1.34"
+
 # SSH key: content (ORM) or path (local). Content wins when set.
 # ssh_public_key      = "ssh-ed25519 AAAA... you@host"
 # ssh_public_key_path = "~/.ssh/id_rsa.pub"
