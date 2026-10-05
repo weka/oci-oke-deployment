@@ -68,9 +68,14 @@ JOB_ID_FILE   := $(BUILD)/.job-id
 # pre-authenticated host (Cloud Shell / ORM runner).
 OCI_ARGS := $(if $(OCI_PROFILE),--profile $(OCI_PROFILE),) $(if $(REGION),--region $(REGION),)
 
+# Dump the stack's Terraform state to stdout. Recursively expanded (= not :=) so
+# the stack-id read happens in the recipe, once the file exists.
+TF_STATE = oci resource-manager stack get-stack-tf-state $(OCI_ARGS) \
+             --stack-id $$(cat $(STACK_ID_FILE)) --file -
+
 .PHONY: help check fmt fmt-fix validate init zip vars-json stack-create stack-adopt stack-update \
         plan apply destroy stack-delete logs outputs wait-job status \
-        local-plan local-apply local-destroy clean
+        cr-show cr-apply local-plan local-apply local-destroy clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -307,11 +312,39 @@ status: guard-REGION ## Show the last job's state
 outputs: guard-REGION ## Show stack outputs (kubeconfig command, weka_sizing, ...)
 	@oci resource-manager associated-resource-summary list-stack-associated-resources $(OCI_ARGS) \
 	  --stack-id $$(cat $(STACK_ID_FILE)) --query 'data[*]."resource-type"' 2>/dev/null | head -20 || true
-	@oci resource-manager stack get-stack-tf-state $(OCI_ARGS) \
-	  --stack-id $$(cat $(STACK_ID_FILE)) --file - 2>/dev/null \
+	@$(TF_STATE) 2>/dev/null \
 	  | python3 -c 'import json,sys; \
 	o=json.load(sys.stdin).get("outputs",{}); \
 	[print("%s = %s" % (k, v.get("value"))) for k,v in o.items()]' || echo "(no state yet)"
+
+# ---------------------------------------------------------------------------
+# Re-apply ONE WEKA CR, straight from the stack's state.
+#
+# `make apply` cannot do this: kubectl_manifest.weka_cr is a single for_each over
+# crds/*.yaml, so an apply recreates every CR that is missing from the cluster,
+# and an ORM apply job accepts no -target to narrow it. The state's yaml_body is
+# what Terraform last rendered — NOT what the working tree would render now — so
+# the CR that lands is the one the stack already believes it applied.
+# ---------------------------------------------------------------------------
+
+# The for_each key the state files each CR under.
+CR ?= 03-wekacluster.yaml
+
+# Where scripts/reserve-deploy.sh writes the kubeconfig.
+KUBECONFIG ?= $(BUILD)/kubeconfig.$(STACK_NAME)
+
+cr-show: guard-REGION ## Print a rendered CR from the stack state (CR=03-wekacluster.yaml)
+	@$(TF_STATE) \
+	  | CR='$(CR)' python3 -c 'import json,os,sys; \
+	key = os.environ["CR"]; \
+	ys = [i["attributes"]["yaml_body"] \
+	      for r in json.load(sys.stdin).get("resources", []) if r["name"] == "weka_cr" \
+	      for i in r["instances"] if i["index_key"] == key]; \
+	sys.stdout.write(ys[0]) if ys else sys.exit("ERROR: no kubectl_manifest.weka_cr[%s] in the stack state" % key)'
+
+cr-apply: guard-REGION ## Apply that CR to the live cluster (CR=..., KUBECONFIG=...)
+	@test -f '$(KUBECONFIG)' || { echo "ERROR: no kubeconfig at $(KUBECONFIG) — pass KUBECONFIG=<path>"; exit 1; }
+	@$(MAKE) --no-print-directory cr-show | KUBECONFIG='$(KUBECONFIG)' kubectl apply -f -
 
 # ---------------------------------------------------------------------------
 # Local Terraform path — faster than ORM, but runs on YOUR auth and needs
