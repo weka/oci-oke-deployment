@@ -565,6 +565,7 @@ do_deploy() {
     --token-version 2.0.0 --kube-endpoint PUBLIC_ENDPOINT >/dev/null
   chmod 600 "$kubeconfig"
   echo "  $kubeconfig"
+  echo "  use it with: export KUBECONFIG=$kubeconfig"
 
   say "Tracking WEKA readiness"
   KUBECONFIG="$kubeconfig" EXPECTED_NODES="$NODE_COUNT" \
