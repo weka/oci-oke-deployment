@@ -254,6 +254,9 @@ resource "helm_release" "weka_operator" {
     # the whole reconcile and is not pinned here.
     name  = "kubeExecTimeout"
     value = "20m"
+    }, {
+    name  = "fullPcpusOnly"
+    value = tostring(var.weka_full_pcpus_only)
   }]
 
   # wait=true blocks until the release is ready before the CRs apply.

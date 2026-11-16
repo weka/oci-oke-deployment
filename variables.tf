@@ -425,6 +425,13 @@ variable "operator_version" {
   default     = "v1.16.3"
 }
 
+# Not in schema-*.yaml on purpose: false is only a rollback switch.
+variable "weka_full_pcpus_only" {
+  description = "Operator fullPcpusOnly: round WEKA pod CPU requests up to whole cores, so no hyperthread sibling is shared with other workloads."
+  type        = bool
+  default     = true
+}
+
 # No default ON PURPOSE: the WekaCluster and WekaClient CRDs both list spec.image
 # as required, so there is no version the operator would fall back to and none
 # this stack can pick on the deployer's behalf.
