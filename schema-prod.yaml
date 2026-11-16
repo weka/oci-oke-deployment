@@ -37,6 +37,7 @@ variableGroups:
   - title: "Hidden"
     visible: false
     variables:
+      - marketplace_source_images
       - config_file_profile
       - oci_cli_auth
       - region
